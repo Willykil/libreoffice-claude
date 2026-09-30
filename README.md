@@ -1,24 +1,23 @@
 # Claude for LibreOffice
 
-A LibreOffice extension that adds a **Claude** menu (and an **Ask Claude** toolbar button) to
-Writer and Calc, the way the Claude add-ins work in Word and Excel. In the Tabbed interface the
-buttons are on the **Extension** tab.
+A LibreOffice extension that puts Claude in a side panel next to Writer and Calc, the way the
+Claude add-ins work in Word and Excel.
 
-Click the sparkle button (or **Claude > Ask Claude...**) and pick a quick action - *Improve*,
-*Fix grammar*, *Make shorter*, *More formal*, *Simplify*, *Translate FR / EN*, *Summarize*,
-*Explain* in Writer; *Explain*, *Summarize*, *Find errors*, *Add totals*, *Clean up* in Calc - or
-type your own request. Nothing selected? Claude reads the whole document (Writer) or the sheet's
-filled area (Calc); the Ask window says which.
+Click the sparkle button (toolbar, **Extension** tab in the Tabbed interface, or
+**Claude > Ask Claude...**). The panel docks on the right of the screen, LibreOffice moves over to
+make room, and it follows your light/dark Windows theme. It shows what Claude will read (your
+selection, or the whole document / the sheet's filled area when nothing is selected) and offers:
 
-Claude's reply opens in a window where you can edit it, **Refine...** it ("shorter",
-"in English"...), then:
+- **Quick actions** - Writer: *Improve, Fix grammar, Make shorter, More formal, Simplify,
+  Translate FR / EN, Summarize, Explain*. Calc: *Explain, Summarize, Find errors, Add totals,
+  Clean up*. Or type any request; follow-ups keep the conversation ("shorter", "in English").
+- **Reply cards** with *Replace selection* / *Insert below* (Writer) or *Write at selection* /
+  *Write below* (Calc; tab-separated rows and Markdown tables become cells, `=` values live
+  formulas, shown as a table preview first), plus *Copy*. Each insertion is one Ctrl+Z.
+- **Stop** while Claude is working, and **Settings** (gear icon).
 
-- **Writer:** *Replace selection* or *Insert after* (paragraphs are kept).
-- **Calc:** *Write at selection* or *Write below selection*. Tab-separated rows and Markdown tables
-  are split into cells; `=` values become live formulas; numbers become numbers.
-
-Every insertion is a single undo step (Ctrl+Z). The **Claude** menu also has direct *Improve
-Writing*, *Summarize* and *Explain Selection* items, and *Settings...*.
+The **Claude** menu's *Improve Writing*, *Summarize* and *Explain Selection* open the panel and
+run straight away.
 
 ## Install
 
@@ -54,8 +53,10 @@ That's it - no API key needed. Requires LibreOffice 7.0 or newer. On Linux distr
   from here. Calc selections over 50,000 cells are refused rather than silently cut.
 - **Always tell Claude** in Settings adds standing instructions to every request, e.g.
   "Write in Canadian French."
-- While Claude works, a small *Claude is thinking* window shows elapsed time with a Cancel
-  button.
+- **The panel is a small local web page** shown in a chromeless Microsoft Edge window (Chrome
+  also works; otherwise your default browser). It is served by LibreOffice itself on
+  `127.0.0.1` only, and every request needs a random per-session key, so other websites and
+  programs can't drive it. Closing the panel window is fine; the sparkle button reopens it.
 
 ## Develop
 
@@ -68,13 +69,15 @@ extension/                 the .oxt contents
   pythonpath/claude_api.py       settings + API-key connection (raw HTTP, since
                                  LibreOffice's bundled Python can't pip install the SDK)
   pythonpath/claude_office.py    read selection / write reply for Writer and Calc
-  pythonpath/claude_actions.py   the menu actions
-  pythonpath/claude_dialogs.py   dialogs, built in code
+  panel/                   the side panel page (index.html, style.css, app.js)
+  pythonpath/claude_panel.py     local server for the panel + opening/docking its window
+  pythonpath/claude_actions.py   prompts and quick actions
+  pythonpath/claude_dialogs.py   the one native message box (if the panel can't open)
 build.py                   zips extension/ into claude-for-libreoffice.oxt
 tests/test_api.py          API client against a local mock server
 tests/test_cli.py          Claude Code connection against a fake `claude` (fake_claude.py)
 tests/test_uno.py          installs the .oxt into a throwaway profile, starts headless
-                           LibreOffice, and runs every action on real Writer/Calc documents
+                           LibreOffice, and drives the panel's API on real Writer/Calc documents
 ```
 
 ```

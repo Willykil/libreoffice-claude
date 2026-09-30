@@ -38,6 +38,10 @@ class ClaudeError(Exception):
     pass
 
 
+class Cancelled(Exception):
+    pass
+
+
 def load_settings(path):
     settings = dict(DEFAULT_SETTINGS)
     try:
@@ -97,12 +101,15 @@ def parse_response(data):
     return text.strip(), data.get("stop_reason") == "max_tokens"
 
 
-def ask(settings, system, user_text):
-    """Ask through whichever connection is configured. Returns (text, truncated)."""
+def ask(settings, system, user_text, cancel=None):
+    """Ask through whichever connection is configured. Returns (text, truncated).
+
+    cancel: optional threading.Event; Claude Code requests are stopped when it is set.
+    """
     if settings.get("backend") == API:
         return ask_api(settings, system, user_text)
     import claude_cli
-    return claude_cli.ask(settings, system, user_text)
+    return claude_cli.ask(settings, system, user_text, cancel)
 
 
 def ask_api(settings, system, user_text):

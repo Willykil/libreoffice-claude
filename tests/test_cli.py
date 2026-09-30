@@ -82,6 +82,22 @@ class CliTest(unittest.TestCase):
         with self.assertRaisesRegex(claude_api.ClaudeError, "something broke"):
             claude_api.ask(self.settings, "s", "u")
 
+    def test_slow_reply(self):
+        os.environ["FAKE_CLAUDE_MODE"] = "delayed"
+        self.assertEqual(claude_api.ask(self.settings, "s", "u"), ("fake reply", False))
+        self.assertEqual(self.logged()["stdin"], "u")
+
+    def test_cancel_stops_claude_code(self):
+        import threading
+        import time
+        os.environ["FAKE_CLAUDE_MODE"] = "slow"
+        cancel = threading.Event()
+        threading.Timer(0.5, cancel.set).start()
+        start = time.time()
+        with self.assertRaises(claude_api.Cancelled):
+            claude_api.ask(self.settings, "s", "u", cancel)
+        self.assertLess(time.time() - start, 5)
+
     def test_not_installed(self):
         with self.assertRaisesRegex(claude_api.ClaudeError, "install.ps1"):
             claude_api.ask(dict(self.settings, claude_path=os.path.join(self.tmp.name, "nope")), "s", "u")

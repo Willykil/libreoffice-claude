@@ -1,41 +1,16 @@
-"""UNO entry point. Menu items call service:org.willykil.claude.Job?<action>."""
+"""UNO entry point. Menu items call service:org.willykil.claude.Job?<action>.
+
+Every action opens the Claude side panel (see pythonpath/claude_panel.py);
+"improve", "summarize" and "explain" also run straight away in it.
+"""
 
 import traceback
 
 import unohelper
 from com.sun.star.task import XJobExecutor
 
-import claude_actions
 import claude_dialogs
-
-
-class _DialogUI:
-    REPLACE, INSERT, REFINE = claude_dialogs.REPLACE, claude_dialogs.INSERT, claude_dialogs.REFINE
-
-    def __init__(self, ctx, frame):
-        self.ctx, self.frame = ctx, frame
-
-    def message(self, text, error=False):
-        claude_dialogs.message(self.ctx, self.frame, text, error=error)
-
-    def ask_prompt(self, context, quick_actions, settings):
-        return claude_dialogs.ask_prompt(self.ctx, context, quick_actions, settings)
-
-    def ask_refine(self):
-        return claude_dialogs.ask_refine(self.ctx)
-
-    def show_result(self, text, kind, truncated):
-        return claude_dialogs.show_result(self.ctx, text, kind, truncated)
-
-    def edit_settings(self, settings):
-        return claude_dialogs.edit_settings(self.ctx, settings)
-
-    def wait(self, fn, settings):
-        busy = claude_dialogs.Busy(self.ctx, self.frame, settings)
-        try:
-            return claude_actions.wait_responsive(self.ctx, self.frame, fn, busy)
-        finally:
-            busy.close()
+import claude_panel
 
 
 class ClaudeJob(unohelper.Base, XJobExecutor):
@@ -43,13 +18,12 @@ class ClaudeJob(unohelper.Base, XJobExecutor):
         self.ctx = ctx
 
     def trigger(self, action):
-        desktop = self.ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", self.ctx)
-        frame = desktop.getCurrentFrame()
-        ui = _DialogUI(self.ctx, frame)
         try:
-            claude_actions.run(self.ctx, desktop.getCurrentComponent(), action, ui)
+            claude_panel.open_panel(self.ctx, None if action == "ask" else action)
         except Exception:
-            ui.message("Unexpected error:\n\n" + traceback.format_exc(), error=True)
+            desktop = self.ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", self.ctx)
+            claude_dialogs.message(self.ctx, desktop.getCurrentFrame(),
+                                   "Couldn't open the Claude panel:\n\n" + traceback.format_exc(), error=True)
 
 
 g_ImplementationHelper = unohelper.ImplementationHelper()

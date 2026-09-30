@@ -1,10 +1,12 @@
 """Integration test: install the .oxt into a throwaway profile, run headless
-LibreOffice, and drive the real actions against real Writer/Calc documents.
+LibreOffice, and drive the side panel's API against real Writer/Calc documents.
 
-Needs LibreOffice (soffice) and python3-uno. Talks to a local mock
-API, never the real one.
+Needs LibreOffice (soffice) and python3-uno. Talks to a local mock API or a
+fake `claude`, never the real service.
 """
 
+import http.client
+import json
 import os
 import shutil
 import socket
@@ -27,41 +29,8 @@ from com.sun.star.ucb import XCommandEnvironment  # noqa: E402
 import build  # noqa: E402
 import claude_actions  # noqa: E402
 import claude_api  # noqa: E402
+import claude_panel  # noqa: E402
 from mock_server import MockClaude  # noqa: E402
-
-REPLACE, INSERT, CANCEL, REFINE = 2, 3, 0, 4
-
-
-class FakeUI:
-    REPLACE, INSERT, REFINE = REPLACE, INSERT, REFINE
-
-    def __init__(self, prompt=None, choice=CANCEL, choices=None, refine=None, quick=None):
-        self.prompt, self.quick = prompt, quick
-        self.choices = list(choices or [choice])
-        self.refine = refine
-        self.messages, self.shown = [], []
-
-    def message(self, text, error=False):
-        self.messages.append((text, error))
-
-    def ask_prompt(self, context, quick_actions, settings):
-        self.context, self.quick_actions = context, quick_actions
-        if self.quick is not None:
-            return next(p for label, p, _ in quick_actions if label == self.quick)
-        return self.prompt
-
-    def ask_refine(self):
-        return self.refine
-
-    def show_result(self, text, kind, truncated):
-        self.shown.append((text, kind, truncated))
-        return self.choices.pop(0), text
-
-    def edit_settings(self, settings):
-        return None
-
-    def wait(self, fn, settings):
-        return fn()
 
 
 class _Approve(unohelper.Base, XInteractionHandler):
@@ -92,6 +61,23 @@ def _free_port():
         return s.getsockname()[1]
 
 
+def call(port, token, path, body=None, host=None):
+    """Talk to a panel server the way the page does. Returns (status, headers, json-or-bytes)."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+    headers = {"Host": host or "127.0.0.1:%d" % port, "Content-Type": "application/json"}
+    if token:
+        headers["X-Claude-Token"] = token
+    data = None if body is None else json.dumps(body)
+    conn.request("GET" if body is None else "POST", path, data, headers)
+    res = conn.getresponse()
+    raw = res.read()
+    conn.close()
+    try:
+        return res.status, dict(res.getheaders()), json.loads(raw)
+    except ValueError:
+        return res.status, dict(res.getheaders()), raw
+
+
 class UnoTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -100,9 +86,11 @@ class UnoTest(unittest.TestCase):
         oxt = build.build(os.path.join(cls.tmp, "claude.oxt"))
         env_arg = "-env:UserInstallation=" + profile
         port = _free_port()
+        cls.url_file = os.path.join(cls.tmp, "panel-url")
+        env = dict(os.environ, CLAUDE_LO_BROWSER="none", CLAUDE_LO_PANEL_URL_FILE=cls.url_file)
         cls.proc = subprocess.Popen(["soffice", "--headless", "--invisible", "--norestore", env_arg,
                                      "--accept=socket,host=127.0.0.1,port=%d;urp;" % port],
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
         local = uno.getComponentContext()
         resolver = local.ServiceManager.createInstanceWithContext("com.sun.star.bridge.UnoUrlResolver", local)
         for _ in range(60):
@@ -121,11 +109,12 @@ class UnoTest(unittest.TestCase):
         cls.desktop = cls.ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", cls.ctx)
         cls.mock = MockClaude()
         cls.settings_path = os.path.join(cls.tmp, "settings.json")
-        claude_api.save_settings(cls.settings_path, dict(claude_api.DEFAULT_SETTINGS, backend=claude_api.API,
-                                                         api_key="sk-test", base_url=cls.mock.url))
+        # A panel server in this process, driving the office over the UNO bridge.
+        cls.panel = claude_panel.PanelServer(cls.ctx, cls.settings_path)
 
     @classmethod
     def tearDownClass(cls):
+        cls.panel.shutdown()
         cls.mock.close()
         try:
             cls.desktop.terminate()
@@ -139,14 +128,20 @@ class UnoTest(unittest.TestCase):
 
     def setUp(self):
         self.mock.requests.clear()
+        self.mock.text("ok")
+        claude_api.save_settings(self.settings_path, dict(claude_api.DEFAULT_SETTINGS, backend=claude_api.API,
+                                                          api_key="sk-test", base_url=self.mock.url))
 
     def open(self, kind):
         doc = self.desktop.loadComponentFromURL("private:factory/" + kind, "_blank", 0, (_prop("Hidden", True),))
         self.addCleanup(doc.close, True)
+        self.panel.document = lambda: doc      # hidden documents never become "current"
         return doc
 
-    def run_action(self, doc, action, ui):
-        return claude_actions.run(self.ctx, doc, action, ui, path=self.settings_path)
+    def api(self, path, body=None):
+        status, _, data = call(self.panel.port, self.panel.token, path, body)
+        self.assertEqual(status, 200, data)
+        return data
 
     def last_prompt(self):
         return self.mock.requests[-1]["body"]["messages"][0]["content"]
@@ -183,6 +178,55 @@ class UnoTest(unittest.TestCase):
         path = claude_actions.settings_path(self.ctx)
         self.assertTrue(path.startswith(os.path.join(self.tmp, "profile")), path)
 
+    def test_menu_opens_panel_server_inside_office(self):
+        # The real path: the menu's Job runs inside soffice, starts the server there, and
+        # (with the browser disabled for the test) reports the panel URL.
+        self.open("swriter")
+        job = self.ctx.ServiceManager.createInstanceWithContext("org.willykil.claude.Job", self.ctx)
+        job.trigger("ask")
+        with open(self.url_file) as f:
+            url = f.read()
+        port = int(url.split(":")[2].split("/")[0])
+        token = url.split("t=")[1].split("&")[0]
+        status, _, state = call(port, token, "/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual(state["connection"], "subscription")    # the office profile's default settings
+        # Panel now counts as open: another menu action is queued for it, not a new window.
+        job.trigger("summarize")
+        self.assertEqual(call(port, token, "/api/state")[2]["pending"], "summarize")
+        self.assertIsNone(call(port, token, "/api/state")[2]["pending"])
+
+    # ---- the server's guard rails
+
+    def test_requires_token_and_local_host(self):
+        port = self.panel.port
+        self.assertEqual(call(port, None, "/api/state")[0], 403)
+        self.assertEqual(call(port, "wrong", "/api/state")[0], 403)
+        self.assertEqual(call(port, self.panel.token, "/api/state", host="evil.example:%d" % port)[0], 403)
+        self.assertEqual(call(port, None, "/api/ask", {"instruction": "x"})[0], 403)
+        self.assertEqual(self.mock.requests, [])
+
+    def test_serves_panel_page(self):
+        status, headers, body = call(self.panel.port, None, "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"How can I help?", body)
+        self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
+        for path in ("/app.js", "/style.css"):
+            self.assertEqual(call(self.panel.port, None, path)[0], 200)
+        self.assertEqual(call(self.panel.port, None, "/../pythonpath/claude_api.py")[0], 403)
+
+    def test_settings_api_never_returns_key(self):
+        s = self.api("/api/settings")
+        self.assertNotIn("api_key", s)
+        self.assertTrue(s["has_api_key"])
+        s = self.api("/api/settings", {"backend": "claude_code", "effort": "high", "model": "",
+                                       "extra_instructions": "Write in Canadian French."})
+        self.assertEqual((s["backend"], s["effort"]), ("claude_code", "high"))
+        s = self.api("/api/settings", {"clear_api_key": True})
+        self.assertFalse(s["has_api_key"])
+        self.assertEqual(claude_api.load_settings(self.settings_path)["extra_instructions"],
+                         "Write in Canadian French.")
+
     # ---- Writer
 
     def writer_with_selection(self):
@@ -202,42 +246,46 @@ class UnoTest(unittest.TestCase):
             out.append(e.nextElement().getString())
         return out
 
-    def test_writer_improve_replaces_selection(self):
+    def test_state_describes_selection(self):
+        self.writer_with_selection()
+        state = self.api("/api/state")
+        self.assertEqual(state["doc"]["kind"], "writer")
+        self.assertEqual(state["doc"]["label"], "Selection: 4 words")
+        self.assertTrue(state["doc"]["has_selection"])
+        self.assertEqual(state["connection"], "api")
+        quick = {q["label"]: q for q in state["quick"]}
+        self.assertTrue(quick["Fix grammar"]["needs_selection"])
+        self.assertFalse(quick["Summarize"]["needs_selection"])
+
+    def test_ask_then_replace_selection(self):
         doc = self.writer_with_selection()
         self.mock.text("This sentence has errors.\n\nSecond line.")
-        ui = FakeUI(choice=REPLACE)
-        self.run_action(doc, "improve", ui)
+        res = self.api("/api/ask", {"action": "improve"})
+        self.assertEqual(res["text"], "This sentence has errors.\n\nSecond line.")
+        self.assertIsNone(res["grid"])
         self.assertIn("<selection>\nthis sentense has erors\n</selection>", self.last_prompt())
+        self.assertIn(claude_actions.PROMPTS["improve"], self.last_prompt())
         self.assertIn("LibreOffice Writer", self.last_system())
-        self.assertEqual(ui.shown[0][1], "writer")
+        self.assertEqual(self.api("/api/apply", {"text": res["text"], "mode": "replace"}), {"ok": True})
         self.assertEqual(self.paragraphs(doc),
                          ["First paragraph stays.", "This sentence has errors.", "", "Second line."])
         doc.getUndoManager().undo()   # one undo step reverts the whole insertion
         self.assertEqual(self.paragraphs(doc), ["First paragraph stays.", "this sentense has erors"])
 
-    def test_writer_via_claude_code(self):
-        from test_cli import make_fake_claude
+    def test_insert_below(self):
         doc = self.writer_with_selection()
-        exe = make_fake_claude(self.tmp)
-        path = os.path.join(self.tmp, "cc-settings.json")
-        claude_api.save_settings(path, dict(claude_api.DEFAULT_SETTINGS, claude_path=exe))
-        os.environ["FAKE_CLAUDE_REPLY"] = "Cette phrase n'a pas d'erreurs."
-        try:
-            claude_actions.run(self.ctx, doc, "improve", FakeUI(choice=REPLACE), path=path)
-        finally:
-            del os.environ["FAKE_CLAUDE_REPLY"]
-        self.assertEqual(self.mock.requests, [])
-        self.assertEqual(self.paragraphs(doc), ["First paragraph stays.", "Cette phrase n'a pas d'erreurs."])
+        self.api("/api/apply", {"text": "Added.", "mode": "after"})
+        self.assertEqual(self.paragraphs(doc), ["First paragraph stays.", "this sentense has erors", "Added."])
 
-    def test_writer_insert_after(self):
-        doc = self.writer_with_selection()
-        self.mock.text("Added.")
-        self.run_action(doc, "ask", FakeUI(prompt="continue", choice=INSERT))
-        self.assertTrue(self.last_prompt().endswith("\n\ncontinue"))
-        self.assertEqual(self.paragraphs(doc),
-                         ["First paragraph stays.", "this sentense has erors", "Added."])
+    def test_follow_up_carries_the_conversation(self):
+        self.writer_with_selection()
+        self.api("/api/ask", {"instruction": "Fix it", "history": [
+            {"role": "user", "text": "Fix it"}, {"role": "assistant", "text": "First try."}]})
+        prompt = self.last_prompt()
+        self.assertIn("<conversation>\nUser: Fix it\n\nClaude: First try.\n</conversation>", prompt)
+        self.assertTrue(prompt.endswith("New request: Fix it"))
 
-    def test_writer_no_selection_uses_document_incl_tables(self):
+    def test_no_selection_uses_document_incl_tables(self):
         doc = self.open("swriter")
         doc.getText().setString("Intro text")
         table = doc.createInstance("com.sun.star.text.TextTable")
@@ -246,29 +294,46 @@ class UnoTest(unittest.TestCase):
         text.insertTextContent(text.getEnd(), table, False)
         table.getCellByName("A1").setString("Qty")
         table.getCellByName("B2").setString("42")
-        self.mock.text("Summary.")
-        ui = FakeUI()
-        self.run_action(doc, "summarize", ui)
-        prompt = self.last_prompt()
-        self.assertIn("<document>\nIntro text\nQty\t\n\t42", prompt)
-        self.assertEqual(ui.shown[0][0], "Summary.")
+        self.api("/api/ask", {"action": "summarize"})
+        self.assertIn("<document>\nIntro text\nQty\t\n\t42", self.last_prompt())
 
-    def test_writer_improve_needs_selection(self):
-        doc = self.open("swriter")
-        doc.getText().setString("x")
-        ui = FakeUI()
-        self.run_action(doc, "improve", ui)
-        self.assertEqual(self.mock.requests, [])
-        self.assertIn("Select the text", ui.messages[0][0])
-
-    def test_api_error_is_shown(self):
-        doc = self.writer_with_selection()
+    def test_errors_come_back_as_messages(self):
+        self.writer_with_selection()
+        self.assertIn("Type what", self.api("/api/ask", {"instruction": "  "})["error"])
         self.mock.status = 500
         self.mock.reply = {"type": "error", "error": {"type": "api_error", "message": "boom"}}
-        ui = FakeUI(choice=REPLACE)
-        self.run_action(doc, "improve", ui)
-        self.assertEqual(ui.messages, [("Claude API error 500: boom", True)])
-        self.assertEqual(ui.shown, [])
+        self.assertEqual(self.api("/api/ask", {"instruction": "x"})["error"], "Claude API error 500: boom")
+        claude_api.save_settings(self.settings_path, dict(claude_api.DEFAULT_SETTINGS, backend=claude_api.API))
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        res = self.api("/api/ask", {"instruction": "x"})
+        self.assertTrue(res["open_settings"])
+
+    def test_claude_code_connection_and_stop(self):
+        from test_cli import make_fake_claude
+        self.writer_with_selection()
+        exe = make_fake_claude(self.tmp)
+        claude_api.save_settings(self.settings_path, dict(claude_api.DEFAULT_SETTINGS, claude_path=exe))
+        os.environ["FAKE_CLAUDE_REPLY"] = "Cette phrase n'a pas d'erreurs."
+        try:
+            self.assertEqual(self.api("/api/ask", {"instruction": "Corrige"})["text"],
+                             "Cette phrase n'a pas d'erreurs.")
+            os.environ["FAKE_CLAUDE_MODE"] = "slow"
+            import threading
+            out = {}
+            t = threading.Thread(target=lambda: out.update(self.api("/api/ask", {"instruction": "slow"})))
+            t.start()
+            time.sleep(1.0)
+            self.assertTrue(self.api("/api/state")["busy"])
+            start = time.time()
+            self.api("/api/cancel", {})
+            t.join(10)
+            self.assertEqual(out, {"cancelled": True})
+            self.assertLess(time.time() - start, 5)
+            self.assertFalse(self.api("/api/state")["busy"])
+        finally:
+            for k in ("FAKE_CLAUDE_REPLY", "FAKE_CLAUDE_MODE"):
+                os.environ.pop(k, None)
+        self.assertEqual(self.mock.requests, [])
 
     # ---- Calc
 
@@ -282,16 +347,16 @@ class UnoTest(unittest.TestCase):
                 cell.setValue(v) if isinstance(v, (int, float)) else cell.setString(v)
         return doc, sheet
 
-    def test_calc_write_below_with_formulas(self):
+    def test_calc_grid_reply_written_below(self):
         doc, sheet = self.calc_with_data()
         doc.getCurrentController().select(sheet.getCellRangeByName("A1:B3"))
         self.mock.text("```tsv\nTotal\t=SUM(B2:B3)\nTaxed\t=IF(B4>5,B4*1.2,\"n/a\")\n```")
-        ui = FakeUI(prompt="add a total", choice=INSERT)
-        self.run_action(doc, "ask", ui)
-        prompt = self.last_prompt()
+        res = self.api("/api/ask", {"instruction": "add a total"})
         self.assertIn('Sheet "Sheet1", selected range A1:B3:\n\tA\tB\n1\tItem\tPrice\n2\tTea\t3\n3\tCake\t4.5',
-                      prompt)
+                      self.last_prompt())
         self.assertIn("LibreOffice Calc", self.last_system())
+        self.assertEqual(res["grid"], [["Total", "=SUM(B2:B3)"], ["Taxed", '=IF(B4>5,B4*1.2,"n/a")']])
+        self.api("/api/apply", {"text": res["text"], "mode": "after"})
         self.assertEqual(sheet.getCellRangeByName("A4").getString(), "Total")
         self.assertEqual(sheet.getCellRangeByName("B4").getValue(), 7.5)
         self.assertEqual(sheet.getCellRangeByName("B5").getFormula(), '=IF(B4>5;B4*1.2;"n/a")')
@@ -301,75 +366,15 @@ class UnoTest(unittest.TestCase):
         doc, sheet = self.calc_with_data()
         doc.getCurrentController().select(sheet.getCellRangeByName("D2"))
         self.mock.text("| Name | Code |\n|---|---|\n| Bond | 007 |")
-        self.run_action(doc, "ask", FakeUI(prompt="table", choice=REPLACE))
+        res = self.api("/api/ask", {"instruction": "table"})
         self.assertIn("cursor is on cell D2", self.last_prompt())
         self.assertIn("3\tCake\t4.5", self.last_prompt())
+        self.api("/api/apply", {"text": res["text"], "mode": "replace"})
         self.assertEqual(sheet.getCellRangeByName("D2").getString(), "Name")
         self.assertEqual(sheet.getCellRangeByName("E3").getString(), "007")   # stays text
         self.assertEqual(sheet.getCellRangeByName("E3").getType().value, "TEXT")
-
-    def test_dialogs_build(self):
-        # Headless LibreOffice cancels modal dialogs immediately, but building them still
-        # validates every control model and property name against the real toolkit.
-        import claude_dialogs
-        import claude_office
-        settings = dict(claude_api.DEFAULT_SETTINGS)
-        for kind, sel in ((claude_office.WRITER, True), (claude_office.CALC, False)):
-            ctx_ = claude_office.Context(kind, "t", sel, "Selection: 3 words")
-            self.assertIsNone(claude_dialogs.ask_prompt(self.ctx, ctx_, claude_actions.QUICK_ACTIONS[kind],
-                                                        settings))
-        self.assertIsNone(claude_dialogs.ask_refine(self.ctx))
-        self.assertEqual(claude_dialogs.show_result(self.ctx, "reply", "calc", True), (0, "reply"))
-        self.assertEqual(claude_dialogs.show_result(self.ctx, "reply", "writer", False)[0], 0)
-        self.assertIsNone(claude_dialogs.edit_settings(self.ctx, settings))
-        claude_dialogs.message(self.ctx, None, "hello")
-        self.assertTrue(claude_dialogs._icon_url(self.ctx).endswith("/icons/sparkle_white_26.png"))
-
-    def test_busy_window_and_cancel(self):
-        import claude_dialogs
-        doc = self.open("swriter")
-        frame = doc.getCurrentController().getFrame()
-        busy = claude_dialogs.Busy(self.ctx, frame, dict(claude_api.DEFAULT_SETTINGS))
-        try:
-            self.assertFalse(frame.getContainerWindow().isEnabled())
-            busy.cancelled = True
-            with self.assertRaises(claude_actions.Cancelled):
-                claude_actions.wait_responsive(self.ctx, frame, lambda: time.sleep(2), busy)
-        finally:
-            busy.close()
-        self.assertTrue(frame.getContainerWindow().isEnabled())
-
-    def test_quick_action_and_refine(self):
-        doc = self.writer_with_selection()
-        self.mock.text("First try.")
-        ui = FakeUI(quick="Fix grammar", choices=[REFINE, REPLACE], refine="in English")
-        self.run_action(doc, "ask", ui)
-        self.assertEqual(len(self.mock.requests), 2)
-        self.assertIn("Correct the spelling", self.mock.requests[0]["body"]["messages"][0]["content"])
-        second = self.last_prompt()
-        self.assertIn("<previous_reply>\nFirst try.\n</previous_reply>", second)
-        self.assertTrue(second.endswith("Revise that reply as follows: in English"))
-        self.assertEqual(self.paragraphs(doc), ["First paragraph stays.", "First try."])
-
-    def test_quick_actions_listed(self):
-        doc = self.open("scalc")
-        ui = FakeUI()
-        self.run_action(doc, "ask", ui)
-        self.assertIn("Find errors", [label for label, _, _ in ui.quick_actions])
-
-    def test_job_trigger_runs_in_office(self):
-        job = self.ctx.ServiceManager.createInstanceWithContext("org.willykil.claude.Job", self.ctx)
-        self.open("swriter")
-        job.trigger("settings")
-        job.trigger("ask")      # prompt dialog is auto-cancelled: no request goes out
-        self.assertEqual(self.mock.requests, [])
-
-    def test_wait_responsive_over_real_toolkit(self):
-        doc = self.open("swriter")
-        frame = doc.getCurrentController().getFrame()
-        self.assertEqual(claude_actions.wait_responsive(self.ctx, frame, lambda: (time.sleep(0.3), 5)[1]), 5)
-        with self.assertRaises(ValueError):
-            claude_actions.wait_responsive(self.ctx, frame, lambda: int("x"))
+        state = self.api("/api/state")
+        self.assertIn("Find errors", [q["label"] for q in state["quick"]])
 
 
 if __name__ == "__main__":

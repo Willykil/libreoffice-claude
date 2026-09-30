@@ -12,8 +12,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
-from claude_api import ClaudeError
+from claude_api import Cancelled, ClaudeError
 
 INSTALL_HELP = (
     "Claude Code isn't installed (or LibreOffice can't find it).\n\n"
@@ -64,8 +65,8 @@ def build_command(exe, settings, system_file):
     return cmd
 
 
-def ask(settings, system, user_text):
-    """Returns (text, truncated). Raises ClaudeError."""
+def ask(settings, system, user_text, cancel=None):
+    """Returns (text, truncated). Raises ClaudeError, or Cancelled if `cancel` gets set."""
     exe = find_claude(settings)
     if not exe:
         raise ClaudeError(INSTALL_HELP)
@@ -76,21 +77,36 @@ def ask(settings, system, user_text):
             f.write(system)
         flags = 0x08000000 if sys.platform == "win32" else 0   # CREATE_NO_WINDOW
         try:
-            proc = subprocess.run(build_command(exe, settings, system_file),
-                                  input=user_text.encode("utf-8"),
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  cwd=tempfile.gettempdir(), timeout=timeout, creationflags=flags)
-        except subprocess.TimeoutExpired:
-            raise ClaudeError("Claude Code didn't answer within %d seconds." % timeout) from None
+            proc = subprocess.Popen(build_command(exe, settings, system_file), stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    cwd=tempfile.gettempdir(), creationflags=flags)
         except OSError as e:
             raise ClaudeError("Couldn't start Claude Code (%s): %s" % (exe, e)) from None
+        stdout, stderr = _communicate(proc, user_text.encode("utf-8"), timeout, cancel)
     finally:
         try:
             os.remove(system_file)
         except OSError:
             pass
-    return parse_output(proc.returncode, proc.stdout.decode("utf-8", "replace"),
-                        proc.stderr.decode("utf-8", "replace"))
+    return parse_output(proc.returncode, stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace"))
+
+
+def _communicate(proc, data, timeout, cancel):
+    """proc.communicate, but give up on timeout or when `cancel` (a threading.Event) is set."""
+    deadline = time.time() + timeout
+    while True:
+        try:
+            return proc.communicate(data, timeout=0.2)
+        except subprocess.TimeoutExpired:
+            data = None          # already sent; retries must not pass it again
+            if cancel is not None and cancel.is_set():
+                proc.kill()
+                proc.communicate()
+                raise Cancelled() from None
+            if time.time() > deadline:
+                proc.kill()
+                proc.communicate()
+                raise ClaudeError("Claude Code didn't answer within %d seconds." % timeout) from None
 
 
 def parse_output(returncode, stdout, stderr):
