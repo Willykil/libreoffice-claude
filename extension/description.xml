@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<description xmlns="http://openoffice.org/extensions/description/2006"
+             xmlns:xlink="http://www.w3.org/1999/xlink">
+  <identifier value="org.willykil.claude"/>
+  <version value="0.1.0"/>
+  <display-name>
+    <name lang="en">Claude for LibreOffice</name>
+  </display-name>
+  <publisher>
+    <name lang="en" xlink:href="https://github.com/willykil/dev-tools">willykil</name>
+  </publisher>
+  <extension-description>
+    <src lang="en" xlink:href="description/desc_en.txt"/>
+  </extension-description>
+  <dependencies>
+    <l:LibreOffice-minimal-version xmlns:l="http://libreoffice.org/extensions/description/2011"
+                                   xmlns:d="http://openoffice.org/extensions/description/2006"
+                                   d:name="LibreOffice 7.0" value="7.0"/>
+  </dependencies>
+</description>
