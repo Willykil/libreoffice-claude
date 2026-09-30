@@ -1,7 +1,8 @@
 # Claude for LibreOffice
 
 A LibreOffice extension that adds a **Claude** menu (and an **Ask Claude** toolbar button) to
-Writer and Calc, the way the Claude add-ins work in Word and Excel.
+Writer and Calc, the way the Claude add-ins work in Word and Excel. In the Tabbed interface the
+buttons are on the **Extension** tab.
 
 | Menu item | Writer | Calc |
 | --- | --- | --- |
@@ -21,7 +22,7 @@ Every insertion is a single undo step (Ctrl+Z).
 
 ## Install
 
-1. Download [`claude-for-libreoffice.oxt`](claude-for-libreoffice.oxt).
+1. Download [`claude-for-libreoffice.oxt`](claude-for-libreoffice.oxt) (on GitHub: open the file, then the download button).
 2. In LibreOffice: **Tools > Extensions > Add...**, pick the file, then restart LibreOffice.
    (Or double-click the `.oxt`.)
 3. Open **Claude > Settings...** and paste an API key from

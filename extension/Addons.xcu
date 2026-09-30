@@ -43,6 +43,24 @@
         </node>
       </node>
     </node>
+    <node oor:name="OfficeNotebookBar">
+      <node oor:name="org.willykil.claude.notebookbar" oor:op="replace">
+        <node oor:name="n1" oor:op="replace">
+          <prop oor:name="URL" oor:type="xs:string"><value>service:org.willykil.claude.Job?ask</value></prop>
+          <prop oor:name="Title" oor:type="xs:string"><value xml:lang="en-US">Ask Claude</value></prop>
+          <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
+          <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument</value></prop>
+          <prop oor:name="ControlType" oor:type="xs:string"><value>ImageButton</value></prop>
+        </node>
+        <node oor:name="n2" oor:op="replace">
+          <prop oor:name="URL" oor:type="xs:string"><value>service:org.willykil.claude.Job?settings</value></prop>
+          <prop oor:name="Title" oor:type="xs:string"><value xml:lang="en-US">Claude Settings</value></prop>
+          <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
+          <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument</value></prop>
+          <prop oor:name="ControlType" oor:type="xs:string"><value>ImageButton</value></prop>
+        </node>
+      </node>
+    </node>
     <node oor:name="OfficeToolbarMerging">
       <node oor:name="org.willykil.claude" oor:op="replace">
         <node oor:name="writer" oor:op="replace">

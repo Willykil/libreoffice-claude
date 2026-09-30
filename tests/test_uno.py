@@ -163,6 +163,8 @@ class UnoTest(unittest.TestCase):
                 for n in menu.getByName("Submenu").getElementNames()]
         for action in ("ask", "improve", "summarize", "explain", "settings"):
             self.assertIn("service:org.willykil.claude.Job?" + action, urls)
+        tab = node.getByName("OfficeNotebookBar").getByName("org.willykil.claude.notebookbar")
+        self.assertEqual(tab.getByName("n1").getPropertyValue("URL"), "service:org.willykil.claude.Job?ask")
         merging = node.getByName("OfficeToolbarMerging").getByName("org.willykil.claude")
         for name in ("writer", "calc"):
             self.assertEqual(merging.getByName(name).getPropertyValue("MergeToolBar"), "standardbar")
