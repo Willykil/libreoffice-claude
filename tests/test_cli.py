@@ -67,6 +67,12 @@ class CliTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--model") + 1], "claude-sonnet-5-5")
         self.assertNotIn("--effort", argv)
 
+    def test_no_effort_flag_for_haiku(self):
+        claude_api.ask(dict(self.settings, model="claude-haiku-4-5", effort="high"), "s", "u")
+        argv = self.logged()["argv"]
+        self.assertEqual(argv[argv.index("--model") + 1], "claude-haiku-4-5")
+        self.assertNotIn("--effort", argv)
+
     def test_system_prompt_file_removed(self):
         claude_api.ask(self.settings, "s", "u")
         argv = self.logged()["argv"]

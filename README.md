@@ -11,10 +11,21 @@ selection, or the whole document / the sheet's filled area when nothing is selec
 - **Quick actions** - Writer: *Improve, Fix grammar, Make shorter, More formal, Simplify,
   Translate FR / EN, Summarize, Explain*. Calc: *Explain, Summarize, Find errors, Add totals,
   Clean up*. Or type any request; follow-ups keep the conversation ("shorter", "in English").
+- **Model and effort pickers** under the message box (Opus 5.5, Sonnet 5.5, Haiku 4.5,
+  Fable 5.1; effort Low to Max - Haiku has no effort setting).
+- **Clickable citations** - answers point at paragraphs (¶12) or cells (B7, Costs!B2:B9);
+  click one to jump there.
+- **Claude reads the whole document or workbook** - every sheet in Calc (while under 50,000
+  cells), plus comments and tracked changes in Writer, so "summarize the redlines" or "what do
+  the comments ask for" work. Your selection is what it works on.
 - **Reply cards** with *Replace selection* / *Insert below* (Writer) or *Write at selection* /
   *Write below* (Calc; tab-separated rows and Markdown tables become cells, `=` values live
   formulas, shown as a table preview first), plus *Copy*. Each insertion is one Ctrl+Z.
-- **Stop** while Claude is working, and **Settings** (gear icon).
+- **Track** (Writer) - Claude's edits go in as tracked changes to accept or reject.
+- **Overwrite protection** (Calc) - asks before writing over cells that already have content,
+  and selects what it wrote.
+- **Past conversations** (clock icon), kept on this computer only; clear them in Settings.
+- **Settings** (gear): connection, and separate standing instructions for Writer and Calc.
 
 The **Claude** menu's *Improve Writing*, *Summarize* and *Explain Selection* open the panel and
 run straight away.
@@ -48,11 +59,11 @@ That's it - no API key needed. Requires LibreOffice 7.0 or newer. On Linux distr
   [console.anthropic.com](https://console.anthropic.com/settings/keys) billing. That key is
   stored in plain text in `claude-for-libreoffice.json` in your LibreOffice user profile
   (`%APPDATA%\LibreOffice\4\user` on Windows), or set `ANTHROPIC_API_KEY`.
-- **What is sent:** the selection (or whole document / used sheet area when nothing is
-  selected) plus your instruction. Nothing else. Claude gets no file, web or command access
+- **What is sent:** the document (or the workbook's sheets), its comments and tracked changes,
+  your selection, and your instruction. Nothing else. Claude gets no file, web or command access
   from here. Calc selections over 50,000 cells are refused rather than silently cut.
-- **Always tell Claude** in Settings adds standing instructions to every request, e.g.
-  "Write in Canadian French."
+- **Always tell Claude in Writer / in Calc** (Settings) adds standing instructions to every
+  request in that app, e.g. "Write in Canadian French."
 - **The panel is a small local web page** shown in a chromeless Microsoft Edge window (Chrome
   also works; otherwise your default browser). It is served by LibreOffice itself on
   `127.0.0.1` only, and every request needs a random per-session key, so other websites and
