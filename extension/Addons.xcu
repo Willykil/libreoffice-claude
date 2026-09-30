@@ -95,5 +95,14 @@
         </node>
       </node>
     </node>
+    <node oor:name="Images">
+      <node oor:name="org.willykil.claude.image.ask" oor:op="replace">
+        <prop oor:name="URL" oor:type="xs:string"><value>service:org.willykil.claude.Job?ask</value></prop>
+        <node oor:name="UserDefinedImages">
+          <prop oor:name="ImageSmallURL" oor:type="xs:string"><value>%origin%/icons/sparkle_16.png</value></prop>
+          <prop oor:name="ImageBigURL" oor:type="xs:string"><value>%origin%/icons/sparkle_26.png</value></prop>
+        </node>
+      </node>
+    </node>
   </node>
 </oor:component-data>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Four-point sparkle with a small companion star; warm accent readable on light and dark themes. -->
+  <path fill="#D9774F" d="M28 4 C30 20 36 26 52 28 C36 30 30 36 28 52 C26 36 20 30 4 28 C20 26 26 20 28 4 Z"/>
+  <path fill="#E8A07E" d="M50 38 C51 45 53 47 60 48 C53 49 51 51 50 58 C49 51 47 49 40 48 C47 47 49 45 50 38 Z"/>
+</svg>

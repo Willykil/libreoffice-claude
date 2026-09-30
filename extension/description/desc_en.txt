@@ -1,1 +1,1 @@
-Adds a Claude menu to Writer and Calc: ask Claude about the selection, improve or summarize text, explain spreadsheet data, and insert the reply (text, tables or formulas) straight into the document. Uses your own Anthropic API key.
+Adds a Claude menu and sparkle button to Writer and Calc: quick actions (improve, fix grammar, shorten, translate, summarize, explain, find errors...), your own requests, and replies inserted straight into the document as text, tables or formulas. Uses your Claude subscription through Claude Code, or an Anthropic API key.

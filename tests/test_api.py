@@ -11,7 +11,8 @@ from mock_server import MockClaude  # noqa: E402
 class ApiTest(unittest.TestCase):
     def setUp(self):
         self.mock = MockClaude()
-        self.settings = dict(claude_api.DEFAULT_SETTINGS, api_key="sk-test", base_url=self.mock.url)
+        self.settings = dict(claude_api.DEFAULT_SETTINGS, backend=claude_api.API, api_key="sk-test",
+                             base_url=self.mock.url)
 
     def tearDown(self):
         self.mock.close()

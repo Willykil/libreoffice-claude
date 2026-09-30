@@ -10,9 +10,14 @@ import os
 import urllib.error
 import urllib.request
 
+CLAUDE_CODE = "claude_code"   # the user's Claude Code install, signed in with their subscription
+API = "api"                    # an Anthropic API key, billed per use
+
 DEFAULT_SETTINGS = {
+    "backend": CLAUDE_CODE,
     "api_key": "",
-    "model": "claude-opus-5-5",
+    "model": "",               # blank: Claude Code's default, or API_DEFAULT_MODEL for the API
+    "claude_path": "",
     "effort": "medium",
     "max_tokens": 16000,
     "extra_instructions": "",
@@ -20,6 +25,7 @@ DEFAULT_SETTINGS = {
     "timeout_seconds": 300,
 }
 
+API_DEFAULT_MODEL = "claude-opus-5-5"
 MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-fable-5-1"]
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
 
@@ -61,7 +67,7 @@ def resolve_api_key(settings):
 
 
 def build_request(settings, system, user_text):
-    model = settings.get("model") or DEFAULT_SETTINGS["model"]
+    model = settings.get("model") or API_DEFAULT_MODEL
     body = {
         "model": model,
         "max_tokens": int(settings.get("max_tokens") or DEFAULT_SETTINGS["max_tokens"]),
@@ -92,11 +98,20 @@ def parse_response(data):
 
 
 def ask(settings, system, user_text):
-    """Send one message to Claude. Returns (text, truncated). Raises ClaudeError."""
+    """Ask through whichever connection is configured. Returns (text, truncated)."""
+    if settings.get("backend") == API:
+        return ask_api(settings, system, user_text)
+    import claude_cli
+    return claude_cli.ask(settings, system, user_text)
+
+
+def ask_api(settings, system, user_text):
+    """Send one message to the Messages API. Returns (text, truncated). Raises ClaudeError."""
     key = resolve_api_key(settings)
     if not key:
         raise ClaudeError("No API key set. Open Claude > Settings and paste your Anthropic API key "
-                          "(from console.anthropic.com), or set ANTHROPIC_API_KEY.")
+                          "(from console.anthropic.com), set ANTHROPIC_API_KEY, or switch the "
+                          "connection to Claude Code to use your Claude subscription.")
     body, headers = build_request(settings, system, user_text)
     headers["x-api-key"] = key
     url = (settings.get("base_url") or DEFAULT_SETTINGS["base_url"]).rstrip("/") + "/v1/messages"

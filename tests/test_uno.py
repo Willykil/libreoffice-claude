@@ -29,31 +29,38 @@ import claude_actions  # noqa: E402
 import claude_api  # noqa: E402
 from mock_server import MockClaude  # noqa: E402
 
-REPLACE, INSERT, CANCEL = 2, 3, 0
+REPLACE, INSERT, CANCEL, REFINE = 2, 3, 0, 4
 
 
 class FakeUI:
-    REPLACE, INSERT = REPLACE, INSERT
+    REPLACE, INSERT, REFINE = REPLACE, INSERT, REFINE
 
-    def __init__(self, prompt=None, choice=CANCEL):
-        self.prompt, self.choice = prompt, choice
+    def __init__(self, prompt=None, choice=CANCEL, choices=None, refine=None, quick=None):
+        self.prompt, self.quick = prompt, quick
+        self.choices = list(choices or [choice])
+        self.refine = refine
         self.messages, self.shown = [], []
 
     def message(self, text, error=False):
         self.messages.append((text, error))
 
-    def ask_prompt(self, label):
-        self.label = label
+    def ask_prompt(self, context, quick_actions, settings):
+        self.context, self.quick_actions = context, quick_actions
+        if self.quick is not None:
+            return next(p for label, p, _ in quick_actions if label == self.quick)
         return self.prompt
+
+    def ask_refine(self):
+        return self.refine
 
     def show_result(self, text, kind, truncated):
         self.shown.append((text, kind, truncated))
-        return self.choice, text
+        return self.choices.pop(0), text
 
     def edit_settings(self, settings):
         return None
 
-    def wait(self, fn):
+    def wait(self, fn, settings):
         return fn()
 
 
@@ -114,7 +121,7 @@ class UnoTest(unittest.TestCase):
         cls.desktop = cls.ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", cls.ctx)
         cls.mock = MockClaude()
         cls.settings_path = os.path.join(cls.tmp, "settings.json")
-        claude_api.save_settings(cls.settings_path, dict(claude_api.DEFAULT_SETTINGS,
+        claude_api.save_settings(cls.settings_path, dict(claude_api.DEFAULT_SETTINGS, backend=claude_api.API,
                                                          api_key="sk-test", base_url=cls.mock.url))
 
     @classmethod
@@ -159,6 +166,9 @@ class UnoTest(unittest.TestCase):
         node = cp.createInstanceWithArguments("com.sun.star.configuration.ConfigurationAccess",
                                               (_prop("nodepath", "/org.openoffice.Office.Addons/AddonUI"),))
         menu = node.getByName("OfficeMenuBar").getByName("org.willykil.claude.menu")
+        image = node.getByName("Images").getByName("org.willykil.claude.image.ask")
+        self.assertTrue(image.getByName("UserDefinedImages").getPropertyValue("ImageSmallURL")
+                        .endswith("/icons/sparkle_16.png"))
         urls = [menu.getByName("Submenu").getByName(n).getPropertyValue("URL")
                 for n in menu.getByName("Submenu").getElementNames()]
         for action in ("ask", "improve", "summarize", "explain", "settings"):
@@ -204,6 +214,20 @@ class UnoTest(unittest.TestCase):
                          ["First paragraph stays.", "This sentence has errors.", "", "Second line."])
         doc.getUndoManager().undo()   # one undo step reverts the whole insertion
         self.assertEqual(self.paragraphs(doc), ["First paragraph stays.", "this sentense has erors"])
+
+    def test_writer_via_claude_code(self):
+        from test_cli import make_fake_claude
+        doc = self.writer_with_selection()
+        exe = make_fake_claude(self.tmp)
+        path = os.path.join(self.tmp, "cc-settings.json")
+        claude_api.save_settings(path, dict(claude_api.DEFAULT_SETTINGS, claude_path=exe))
+        os.environ["FAKE_CLAUDE_REPLY"] = "Cette phrase n'a pas d'erreurs."
+        try:
+            claude_actions.run(self.ctx, doc, "improve", FakeUI(choice=REPLACE), path=path)
+        finally:
+            del os.environ["FAKE_CLAUDE_REPLY"]
+        self.assertEqual(self.mock.requests, [])
+        self.assertEqual(self.paragraphs(doc), ["First paragraph stays.", "Cette phrase n'a pas d'erreurs."])
 
     def test_writer_insert_after(self):
         doc = self.writer_with_selection()
@@ -288,11 +312,50 @@ class UnoTest(unittest.TestCase):
         # Headless LibreOffice cancels modal dialogs immediately, but building them still
         # validates every control model and property name against the real toolkit.
         import claude_dialogs
-        self.assertIsNone(claude_dialogs.ask_prompt(self.ctx, "Selection: 3 words", "hi"))
+        import claude_office
+        settings = dict(claude_api.DEFAULT_SETTINGS)
+        for kind, sel in ((claude_office.WRITER, True), (claude_office.CALC, False)):
+            ctx_ = claude_office.Context(kind, "t", sel, "Selection: 3 words")
+            self.assertIsNone(claude_dialogs.ask_prompt(self.ctx, ctx_, claude_actions.QUICK_ACTIONS[kind],
+                                                        settings))
+        self.assertIsNone(claude_dialogs.ask_refine(self.ctx))
         self.assertEqual(claude_dialogs.show_result(self.ctx, "reply", "calc", True), (0, "reply"))
         self.assertEqual(claude_dialogs.show_result(self.ctx, "reply", "writer", False)[0], 0)
-        self.assertIsNone(claude_dialogs.edit_settings(self.ctx, dict(claude_api.DEFAULT_SETTINGS)))
+        self.assertIsNone(claude_dialogs.edit_settings(self.ctx, settings))
         claude_dialogs.message(self.ctx, None, "hello")
+        self.assertTrue(claude_dialogs._icon_url(self.ctx).endswith("/icons/sparkle_white_26.png"))
+
+    def test_busy_window_and_cancel(self):
+        import claude_dialogs
+        doc = self.open("swriter")
+        frame = doc.getCurrentController().getFrame()
+        busy = claude_dialogs.Busy(self.ctx, frame, dict(claude_api.DEFAULT_SETTINGS))
+        try:
+            self.assertFalse(frame.getContainerWindow().isEnabled())
+            busy.cancelled = True
+            with self.assertRaises(claude_actions.Cancelled):
+                claude_actions.wait_responsive(self.ctx, frame, lambda: time.sleep(2), busy)
+        finally:
+            busy.close()
+        self.assertTrue(frame.getContainerWindow().isEnabled())
+
+    def test_quick_action_and_refine(self):
+        doc = self.writer_with_selection()
+        self.mock.text("First try.")
+        ui = FakeUI(quick="Fix grammar", choices=[REFINE, REPLACE], refine="in English")
+        self.run_action(doc, "ask", ui)
+        self.assertEqual(len(self.mock.requests), 2)
+        self.assertIn("Correct the spelling", self.mock.requests[0]["body"]["messages"][0]["content"])
+        second = self.last_prompt()
+        self.assertIn("<previous_reply>\nFirst try.\n</previous_reply>", second)
+        self.assertTrue(second.endswith("Revise that reply as follows: in English"))
+        self.assertEqual(self.paragraphs(doc), ["First paragraph stays.", "First try."])
+
+    def test_quick_actions_listed(self):
+        doc = self.open("scalc")
+        ui = FakeUI()
+        self.run_action(doc, "ask", ui)
+        self.assertIn("Find errors", [label for label, _, _ in ui.quick_actions])
 
     def test_job_trigger_runs_in_office(self):
         job = self.ctx.ServiceManager.createInstanceWithContext("org.willykil.claude.Job", self.ctx)
