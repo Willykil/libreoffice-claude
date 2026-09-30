@@ -95,9 +95,17 @@ class PanelServer:
         self.last_seen = time.time()
         pending, self.pending = self.pending, None
         settings = claude_api.load_settings(self.settings_path)
+        model = settings.get("model") or ""
         out = {"pending": pending, "busy": self._request is not None,
                "connection": "api" if settings.get("backend") == claude_api.API else "subscription",
-               "doc": None, "quick": []}
+               "doc": None, "quick": [],
+               "model": model, "effort": settings.get("effort") or "medium",
+               "effort_supported": claude_api.supports_effort(model),
+               "track_changes": bool(settings.get("track_changes")),
+               "models": [{"id": m, "label": claude_api.MODEL_LABELS.get(m, m)} for m in claude_api.MODELS],
+               "efforts": [{"id": e, "label": claude_api.EFFORT_LABELS[e]} for e in claude_api.EFFORTS]}
+        if model and model not in claude_api.MODELS:
+            out["models"].append({"id": model, "label": model})
         doc = self.document()
         if doc is not None:
             try:
@@ -128,7 +136,7 @@ class PanelServer:
         if settings.get("backend") == claude_api.API and not claude_api.resolve_api_key(settings):
             return {"error": "Add your Anthropic API key in Settings, or switch the connection to "
                              "Claude Code to use your Claude subscription.", "open_settings": True}
-        system = claude_office.system_prompt(context.kind, settings.get("extra_instructions"))
+        system = claude_office.system_prompt(context.kind, settings.get("instructions_" + context.kind))
         user_text = conversation_prompt(context.text, body.get("history") or [], instruction)
 
         cancel = threading.Event()
@@ -167,24 +175,53 @@ class PanelServer:
         doc = self.document()
         if doc is None:
             return {"error": "Open a Writer document or Calc spreadsheet first."}
+        settings = claude_api.load_settings(self.settings_path)
         try:
-            claude_office.apply_result(doc, text, mode)
+            if claude_office.doc_kind(doc) == claude_office.CALC and not body.get("confirm"):
+                count, where = claude_office.calc_overwrites(doc, text, mode)
+                if count:
+                    return {"confirm": "This replaces %d cell%s that already %s content (%s)."
+                                       % (count, "s" if count > 1 else "", "have" if count > 1 else "has", where)}
+            claude_office.apply_result(doc, text, mode, track_changes=settings.get("track_changes"))
         except claude_office.OfficeError as e:
             return {"error": str(e)}
+        return {"ok": True, "tracked": bool(settings.get("track_changes"))
+                and claude_office.doc_kind(doc) == claude_office.WRITER}
+
+    def goto(self, body):
+        doc = self.document()
+        if doc is None:
+            return {"error": "Open a Writer document or Calc spreadsheet first."}
+        try:
+            claude_office.goto(doc, body.get("ref"))
+        except claude_office.OfficeError as e:
+            return {"error": str(e)}
+        except Exception:
+            return {"error": "Couldn't find %s in the document." % body.get("ref")}
         return {"ok": True}
+
+    # Settings the panel edits. Model, effort and tracked changes also change from the composer.
+    _TEXT_KEYS = ("backend", "model", "effort", "claude_path")
+    _FREE_TEXT_KEYS = ("instructions_writer", "instructions_calc")
 
     def get_settings(self):
         s = claude_api.load_settings(self.settings_path)
-        return {"backend": s["backend"], "model": s["model"], "effort": s["effort"],
-                "max_tokens": s["max_tokens"], "extra_instructions": s["extra_instructions"],
-                "claude_path": s["claude_path"], "has_api_key": bool(s["api_key"]),
-                "models": claude_api.MODELS, "efforts": claude_api.EFFORTS}
+        out = {k: s[k] for k in self._TEXT_KEYS + self._FREE_TEXT_KEYS}
+        out.update({"max_tokens": s["max_tokens"], "track_changes": bool(s["track_changes"]),
+                    "has_api_key": bool(s["api_key"]), "models": claude_api.MODELS,
+                    "efforts": claude_api.EFFORTS})
+        return out
 
     def set_settings(self, body):
         s = claude_api.load_settings(self.settings_path)
-        for key in ("backend", "model", "effort", "extra_instructions", "claude_path"):
+        for key in self._TEXT_KEYS:
             if key in body:
-                s[key] = str(body[key]).strip() if key != "extra_instructions" else str(body[key])
+                s[key] = str(body[key]).strip()
+        for key in self._FREE_TEXT_KEYS:
+            if key in body:
+                s[key] = str(body[key])
+        if "track_changes" in body:
+            s["track_changes"] = bool(body["track_changes"])
         if s["backend"] not in (claude_api.CLAUDE_CODE, claude_api.API):
             s["backend"] = claude_api.CLAUDE_CODE
         if s["effort"] not in claude_api.EFFORTS:
@@ -200,6 +237,45 @@ class PanelServer:
             s["api_key"] = ""
         claude_api.save_settings(self.settings_path, s)
         return self.get_settings()
+
+    # Chat history lives next to the settings, on this computer only, like the M365 add-ins
+    # keep theirs in the browser. The panel's own storage can't be used: its port changes
+    # every session, and with it the page's origin.
+    MAX_CONVERSATIONS = 50
+
+    def _history_path(self):
+        return os.path.join(os.path.dirname(self.settings_path), "claude-panel-history.json")
+
+    def _load_history(self):
+        try:
+            with open(self._history_path(), encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, list) else []
+        except (OSError, ValueError):
+            return []
+
+    def _save_history(self, items):
+        path = self._history_path()
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(items[:self.MAX_CONVERSATIONS], f)
+        os.replace(tmp, path)
+
+    def history(self, body):
+        with self._lock:
+            items = self._load_history()
+            if body.get("clear"):
+                items = []
+            elif body.get("delete"):
+                items = [c for c in items if c.get("id") != body["delete"]]
+            elif isinstance(body.get("save"), dict) and body["save"].get("id"):
+                convo = body["save"]
+                convo["updated"] = time.time()
+                items = [convo] + [c for c in items if c.get("id") != convo["id"]]
+            else:
+                return {"conversations": items}
+            self._save_history(items)
+            return {"conversations": items}
 
 
 def conversation_prompt(context_text, history, instruction):
@@ -287,7 +363,8 @@ def _handler(panel):
             except ValueError:
                 return self._send(400, {"error": "bad request"})
             routes = {"/api/ask": panel.ask, "/api/apply": panel.apply, "/api/settings": panel.set_settings,
-                      "/api/cancel": lambda b: panel.cancel()}
+                      "/api/cancel": lambda b: panel.cancel(), "/api/goto": panel.goto,
+                      "/api/history": panel.history}
             fn = routes.get(urlparse(self.path).path)
             if fn is None:
                 return self._send(404, {"error": "not found"})

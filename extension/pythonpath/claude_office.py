@@ -14,6 +14,7 @@ CALC = "calc"
 # Calc cells sent as context in one request; beyond this we ask for a smaller selection
 # instead of silently truncating.
 MAX_CELLS = 50000
+MAX_DOC_CHARS = 2000000
 
 SYSTEM_BASE = ("You are Claude, an AI assistant built into LibreOffice {app}. "
                "Your reply may be inserted straight into the user's {doc}, so reply with only "
@@ -21,7 +22,11 @@ SYSTEM_BASE = ("You are Claude, an AI assistant built into LibreOffice {app}. "
 
 SYSTEM_WRITER = SYSTEM_BASE.format(app="Writer", doc="document") + (
     " Use plain text without Markdown (no **, #, or code fences); separate paragraphs with a "
-    "blank line and write list items as \"- item\".")
+    "blank line and write list items as \"- item\"."
+    " The document is shown with each paragraph numbered like [P12]. When you answer a question "
+    "about the document, cite the paragraphs you rely on with those markers, e.g. [P12] or "
+    "[P12-P14], so the user can click through to them. Never put markers in text that is meant "
+    "to go into the document.")
 
 SYSTEM_CALC = SYSTEM_BASE.format(app="Calc", doc="spreadsheet") + (
     " Spreadsheet content is shown as a tab-separated grid with column letters across the top "
@@ -29,7 +34,9 @@ SYSTEM_CALC = SYSTEM_BASE.format(app="Calc", doc="spreadsheet") + (
     "the sheet, reply with ONLY tab-separated rows (no row numbers, no column letters, no "
     "Markdown, no code fences); the user writes them into the sheet at or just below the selection. Formulas start "
     "with \"=\", use English function names, and use \";\" as the argument separator, e.g. "
-    "=IF(B2>0;\"yes\";\"no\"). Otherwise answer in concise plain text.")
+    "=IF(B2>0;\"yes\";\"no\"). Otherwise answer in concise plain text, and cite the cells you "
+    "rely on in square brackets, e.g. [B3], [B2:B9] or [Data!C4], so the user can click through "
+    "to them (never in content meant for the sheet).")
 
 
 class OfficeError(Exception):
@@ -82,34 +89,103 @@ def _writer_ranges(doc):
 
 def _writer_context(doc):
     selected = "\n".join(r.getString() for r in _writer_ranges(doc) if r.getString())
+    paras = writer_paragraphs(doc)
+    body = "\n".join("[P%d] %s" % (n, text) for n, text, _ in paras)
+    if len(body) > MAX_DOC_CHARS:
+        raise OfficeError("This document is too long to send in one go. Select the part you want "
+                          "Claude to work on.")
+    parts = ["The document, each paragraph numbered:\n<document>\n%s\n</document>" % body]
+    extras = writer_review_notes(doc)
+    if extras:
+        parts.append(extras)
+    words = sum(len(text.split()) for _, text, _ in paras)
     if selected.strip():
-        return Context(WRITER, "Selected text:\n<selection>\n%s\n</selection>" % selected, True,
-                       "Selection: %d words" % len(selected.split()))
-    body = writer_document_text(doc)
-    return Context(WRITER, "The whole document (nothing is selected):\n<document>\n%s\n</document>" % body,
-                   False, "No selection - using the whole document (%d words)" % len(body.split()))
+        parts.append("The user has selected this text:\n<selection>\n%s\n</selection>" % selected)
+        return Context(WRITER, "\n\n".join(parts), True, "Selection: %d words" % len(selected.split()))
+    parts.append("Nothing is selected.")
+    return Context(WRITER, "\n\n".join(parts), False,
+                   "No selection - Claude reads the whole document (%d words)" % words)
 
 
-def writer_document_text(doc):
-    """Main text including table contents, which XText.getString() leaves out."""
-    parts = []
+def writer_paragraphs(doc):
+    """[(number, text, element)] for the non-empty paragraphs and tables of the main text.
+
+    The numbering is what Claude cites as [P12]; goto() recomputes it the same way.
+    """
+    out, n = [], 0
     enum = doc.getText().createEnumeration()
     while enum.hasMoreElements():
         el = enum.nextElement()
         if el.supportsService("com.sun.star.text.TextTable"):
-            rows = el.getRows().getCount()
-            cols = el.getColumns().getCount()
-            for r in range(rows):
-                cells = []
-                for c in range(cols):
-                    try:
-                        cells.append(el.getCellByName(_col_letters(c) + str(r + 1)).getString())
-                    except Exception:
-                        pass  # merged cells have no name
-                parts.append("\t".join(cells))
+            text = "(table)\n" + _table_text(el)
         else:
-            parts.append(el.getString())
-    return "\n".join(parts)
+            text = el.getString()
+            if not text.strip():
+                continue
+            try:
+                style = el.getPropertyValue("ParaStyleName")
+                if style.startswith("Heading") or style == "Title":
+                    text = "(%s) %s" % (style, text)
+            except Exception:
+                pass
+        n += 1
+        out.append((n, text, el))
+    return out
+
+
+def _table_text(table):
+    rows = table.getRows().getCount()
+    cols = table.getColumns().getCount()
+    lines = []
+    for r in range(rows):
+        cells = []
+        for c in range(cols):
+            try:
+                cells.append(table.getCellByName(_col_letters(c) + str(r + 1)).getString())
+            except Exception:
+                pass  # merged cells have no name
+        lines.append("\t".join(cells))
+    return "\n".join(lines)
+
+
+def writer_review_notes(doc):
+    """Comments and tracked changes, so Claude can summarize redlines or answer about comments."""
+    comments = []
+    try:
+        fields = doc.getTextFields().createEnumeration()
+        while fields.hasMoreElements():
+            f = fields.nextElement()
+            if f.supportsService("com.sun.star.text.textfield.Annotation"):
+                anchor = f.getAnchor().getString().strip()
+                on = ' (on "%s")' % anchor[:200] if anchor else ""
+                comments.append("- %s%s: %s" % (f.Author or "Someone", on, f.Content))
+    except Exception:
+        pass
+    changes = []
+    try:
+        redlines = doc.getRedlines().createEnumeration()
+        while redlines.hasMoreElements():
+            r = redlines.nextElement()
+            kind = r.getPropertyValue("RedlineType")
+            start, end = r.getPropertyValue("RedlineStart"), r.getPropertyValue("RedlineEnd")
+            try:
+                cur = start.getText().createTextCursorByRange(start)
+                cur.gotoRange(end, True)
+                text = cur.getString()
+            except Exception:
+                text = ""
+            label = {"Insert": "Insertion", "Delete": "Deletion", "Format": "Formatting change"}.get(kind, kind)
+            changes.append('- %s by %s: "%s"' % (label, r.getPropertyValue("RedlineAuthor") or "someone",
+                                                 text[:500]))
+    except Exception:
+        pass
+    parts = []
+    if comments:
+        parts.append("Comments in the document:\n" + "\n".join(comments))
+    if changes:
+        parts.append("Tracked changes in the document (the text above still shows them):\n"
+                     + "\n".join(changes))
+    return "\n\n".join(parts)
 
 
 def _calc_selection_address(doc):
@@ -124,34 +200,65 @@ def _calc_selection_address(doc):
     raise OfficeError("Select some cells first (a chart or shape is selected).")
 
 
+def _used_area(sheet):
+    cursor = sheet.createCursor()
+    cursor.gotoEndOfUsedArea(False)
+    end = cursor.getRangeAddress()
+    return 0, 0, end.EndColumn, end.EndRow
+
+
+def _ref(c0, r0, c1, r1):
+    a = "%s%d" % (_col_letters(c0), r0 + 1)
+    return a if (c0, r0) == (c1, r1) else "%s:%s%d" % (a, _col_letters(c1), r1 + 1)
+
+
 def _calc_context(doc):
     addr = _calc_selection_address(doc)
-    sheet = doc.getSheets().getByIndex(addr.Sheet)
+    sheets = doc.getSheets()
+    active = sheets.getByIndex(addr.Sheet)
     single = addr.StartColumn == addr.EndColumn and addr.StartRow == addr.EndRow
-    if single:
-        cursor = sheet.createCursor()
-        cursor.gotoEndOfUsedArea(False)
-        end = cursor.getRangeAddress()
-        grid_range = (0, 0, end.EndColumn, end.EndRow)
+    budget = MAX_CELLS
+    parts = []
+    names = [sheets.getByIndex(i).getName() for i in range(sheets.getCount())]
+    parts.append("Workbook sheets: %s. The user is on sheet \"%s\"." % (", ".join(names), active.getName()))
+
+    sel = (addr.StartColumn, addr.StartRow, addr.EndColumn, addr.EndRow)
+    ref = _ref(*sel)
+    if not single:
+        cells = (sel[2] - sel[0] + 1) * (sel[3] - sel[1] + 1)
+        if cells > MAX_CELLS:
+            raise OfficeError("That's %d cells - too many to send. Select a smaller range (up to %d cells)."
+                              % (cells, MAX_CELLS))
+        budget -= cells
+        data = active.getCellRangeByPosition(*sel).getFormulaArray()
+        parts.append("Selected range %s!%s:\n%s" % (_quote_sheet(active.getName()), ref,
+                                                    format_grid(data, sel[0], sel[1])))
     else:
-        grid_range = (addr.StartColumn, addr.StartRow, addr.EndColumn, addr.EndRow)
-    c0, r0, c1, r1 = grid_range
-    cells = (c1 - c0 + 1) * (r1 - r0 + 1)
-    if cells > MAX_CELLS:
-        raise OfficeError("That's %d cells - too many to send. Select a smaller range (up to %d cells)."
-                          % (cells, MAX_CELLS))
-    data = sheet.getCellRangeByPosition(c0, r0, c1, r1).getFormulaArray()
-    grid = format_grid(data, c0, r0)
-    active = "%s%d" % (_col_letters(addr.StartColumn), addr.StartRow + 1)
+        parts.append("Nothing is selected; the cursor is on cell %s!%s." % (_quote_sheet(active.getName()), ref))
+
+    # Every sheet's used area, active sheet first, while the cell budget lasts.
+    order = [addr.Sheet] + [i for i in range(sheets.getCount()) if i != addr.Sheet]
+    for i in order:
+        sheet = sheets.getByIndex(i)
+        area = _used_area(sheet)
+        cells = (area[2] + 1) * (area[3] + 1)
+        data = sheet.getCellRangeByPosition(*area).getFormulaArray()
+        if not any(v for row in data for v in row):
+            parts.append("Sheet \"%s\" is empty." % sheet.getName())
+        elif cells > budget:
+            parts.append("Sheet \"%s\" (%s, %d cells) is too large to include; select a range in it to "
+                         "work on it." % (sheet.getName(), _ref(*area), cells))
+        else:
+            budget -= cells
+            parts.append("Sheet \"%s\" (%s):\n%s" % (sheet.getName(), _ref(*area), format_grid(data, 0, 0)))
+    text = "\n\n".join(parts)
     if single:
-        empty = not any(v for row in data for v in row)
-        text = ('Sheet "%s". The cursor is on cell %s. ' % (sheet.getName(), active)
-                + ("The sheet is empty." if empty else "Used area of the sheet:\n" + grid))
-        label = "Active cell %s - using the sheet's used area as context" % active
-        return Context(CALC, text, False, label)
-    ref = "%s:%s%d" % (active, _col_letters(addr.EndColumn), addr.EndRow + 1)
-    text = 'Sheet "%s", selected range %s:\n%s' % (sheet.getName(), ref, grid)
-    return Context(CALC, text, True, "Selection: %s (%d cells)" % (ref, cells))
+        return Context(CALC, text, False, "Cell %s - Claude reads the whole workbook" % ref)
+    return Context(CALC, text, True, "Selection: %s (%d cells)" % (ref, (sel[2] - sel[0] + 1) * (sel[3] - sel[1] + 1)))
+
+
+def _quote_sheet(name):
+    return name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", name) else "'%s'" % name.replace("'", "''")
 
 
 def format_grid(data, col0, row0):
@@ -177,17 +284,52 @@ REPLACE = "replace"
 INSERT_AFTER = "after"
 
 
-def apply_result(doc, text, mode):
+def apply_result(doc, text, mode, track_changes=False):
     kind = doc_kind(doc)
     undo = doc.getUndoManager()
     undo.enterUndoContext("Claude")
     try:
         if kind == WRITER:
-            _writer_apply(doc, text, mode)
+            previous = doc.getPropertyValue("RecordChanges")
+            doc.setPropertyValue("RecordChanges", bool(track_changes) or previous)
+            try:
+                _writer_apply(doc, strip_citations(text), mode)
+            finally:
+                doc.setPropertyValue("RecordChanges", previous)
         elif kind == CALC:
             _calc_apply(doc, text, mode)
     finally:
         undo.leaveUndoContext()
+
+
+_CITATION = re.compile(r"\s?\[P\d+(?:\s*[-\u2013]\s*P?\d+)?\]")
+
+
+def strip_citations(text):
+    return _CITATION.sub("", text)
+
+
+def calc_target(doc, text, mode):
+    """(sheet, first col, first row, rows) that a write would touch."""
+    addr = _calc_selection_address(doc)
+    sheet = doc.getSheets().getByIndex(addr.Sheet)
+    row = addr.StartRow if mode == REPLACE else addr.EndRow + 1
+    return sheet, addr.StartColumn, row, parse_grid(text)
+
+
+def calc_overwrites(doc, text, mode):
+    """Cells that already have content and would be overwritten: (count, 'B4:C6' or None)."""
+    sheet, col, row, rows = calc_target(doc, text, mode)
+    hits = []
+    for r, values in enumerate(rows):
+        for c in range(len(values)):
+            cell = sheet.getCellByPosition(col + c, row + r)
+            if cell.getFormula() != "":
+                hits.append((col + c, row + r))
+    if not hits:
+        return 0, None
+    cs, rs = [h[0] for h in hits], [h[1] for h in hits]
+    return len(hits), _ref(min(cs), min(rs), max(cs), max(rs))
 
 
 def _writer_apply(doc, text, mode):
@@ -211,13 +353,64 @@ def _writer_apply(doc, text, mode):
 
 
 def _calc_apply(doc, text, mode):
-    addr = _calc_selection_address(doc)
-    sheet = doc.getSheets().getByIndex(addr.Sheet)
-    col = addr.StartColumn
-    row = addr.StartRow if mode == REPLACE else addr.EndRow + 1
-    for r, values in enumerate(parse_grid(text)):
+    sheet, col, row, rows = calc_target(doc, text, mode)
+    for r, values in enumerate(rows):
         for c, value in enumerate(values):
             set_cell(sheet.getCellByPosition(col + c, row + r), value)
+    if rows:   # select what was written, so it's easy to see
+        width = max(len(v) for v in rows)
+        doc.getCurrentController().select(sheet.getCellRangeByPosition(col, row, col + width - 1,
+                                                                        row + len(rows) - 1))
+
+
+# ---------------------------------------------------------------- citations
+
+_WRITER_REF = re.compile(r"^P(\d+)(?:\s*[-\u2013]\s*P?(\d+))?$")
+_CELL = r"\$?[A-Z]{1,3}\$?\d{1,7}"
+_CALC_REF = re.compile(r"^(?:(?P<sheet>'(?:[^']|'')+'|[^!:'\[\]]+)!)?(?P<range>%s(?::%s)?)$" % (_CELL, _CELL))
+
+
+def goto(doc, ref):
+    """Select what a citation like P12, P3-P5, B7, B2:C9 or 'Data'!C4 points at."""
+    ref = (ref or "").strip()
+    kind = doc_kind(doc)
+    controller = doc.getCurrentController()
+    if kind == WRITER:
+        m = _WRITER_REF.match(ref)
+        if not m:
+            raise OfficeError("Unknown reference: %s" % ref)
+        first, last = int(m.group(1)), int(m.group(2) or m.group(1))
+        paras = {n: el for n, _, el in writer_paragraphs(doc)}
+        if first not in paras:
+            raise OfficeError("Paragraph %d isn't in the document any more." % first)
+        a, b = paras[first], paras.get(last, paras[first])
+        if a.supportsService("com.sun.star.text.TextTable"):
+            controller.select(a)
+            return
+        cursor = a.getText().createTextCursorByRange(a.getStart())
+        try:
+            cursor.gotoRange(b.getEnd() if not b.supportsService("com.sun.star.text.TextTable") else a.getEnd(), True)
+        except Exception:
+            cursor.gotoRange(a.getEnd(), True)
+        controller.select(cursor)
+        return
+    if kind == CALC:
+        m = _CALC_REF.match(ref.replace(" ", ""))
+        if not m:
+            raise OfficeError("Unknown reference: %s" % ref)
+        sheets = doc.getSheets()
+        name = m.group("sheet")
+        if name:
+            name = name[1:-1].replace("''", "'") if name.startswith("'") else name
+            if not sheets.hasByName(name):
+                raise OfficeError("There's no sheet called %s." % name)
+            sheet = sheets.getByName(name)
+        else:
+            sheet = controller.getActiveSheet()
+        controller.setActiveSheet(sheet)
+        controller.select(sheet.getCellRangeByName(m.group("range").replace("$", "")))
+        return
+    raise OfficeError("Open a Writer document or Calc spreadsheet first.")
 
 
 _NUMBER = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")

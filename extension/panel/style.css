@@ -39,7 +39,7 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-html, body { height: 100%; margin: 0; }
+html, body { height: 100%; margin: 0; overflow-x: hidden; }
 body {
   background: var(--bg);
   color: var(--text);
@@ -155,17 +155,36 @@ table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .chip:disabled { opacity: .45; }
 .input {
-  display: flex; align-items: flex-end; gap: 8px; padding: 8px 8px 8px 14px;
+  display: flex; flex-direction: column; gap: 4px; padding: 10px 8px 8px 14px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow);
 }
 .input:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
 .input textarea {
-  flex: 1; resize: none; border: 0; outline: 0; background: transparent; color: var(--text);
-  font: inherit; max-height: 160px; padding: 5px 0;
+  resize: none; border: 0; outline: 0; background: transparent; color: var(--text);
+  font: inherit; max-height: 160px; padding: 0 6px 2px 0;
 }
 .input textarea::placeholder { color: var(--muted); }
+.input-bar { display: flex; align-items: center; gap: 2px; margin-left: -6px; min-width: 0; }
+.input-bar .spacer { flex: 1; }
+.pill {
+  position: relative; display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 8px;
+  border: 0; border-radius: 8px; background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 500;
+  cursor: pointer; white-space: nowrap;
+}
+.pill:hover { background: var(--surface-2); color: var(--text); }
+.pill svg { width: 14px; height: 14px; }
+.pill select {
+  appearance: none; -webkit-appearance: none; border: 0; background: transparent; color: inherit;
+  font: inherit; cursor: pointer; padding-right: 13px; outline: none; field-sizing: content; max-width: 150px;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 4px center, right 0 center; background-size: 4px 4px; background-repeat: no-repeat;
+}
+.pill select option { background: var(--surface); color: var(--text); }
+.pill.disabled { opacity: .45; pointer-events: none; }
+.pill:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pill.toggle[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent); }
 .send {
-  display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; border: 0;
+  display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; border: 0;
   background: var(--accent); color: var(--on-accent);
 }
 .send:disabled { background: var(--surface-2); color: var(--muted); }
@@ -223,3 +242,31 @@ legend, .field > span { display: block; font-size: 12.5px; font-weight: 600; mar
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* citations */
+.cite {
+  display: inline-flex; align-items: center; height: 20px; padding: 0 6px; margin: 0 1px; vertical-align: 1px;
+  border: 0; border-radius: 6px; background: var(--accent-soft); color: var(--accent);
+  font: 600 11.5px/1 inherit; font-variant-numeric: tabular-nums;
+}
+.cite:hover { background: var(--accent); color: var(--on-accent); }
+
+/* overwrite confirmation */
+.confirm {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px;
+  border-top: 1px solid var(--border); background: var(--accent-soft); font-size: 13px;
+}
+.confirm p { margin: 0; flex: 1 1 100%; }
+
+/* history */
+.history-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 12px; text-align: left;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface);
+}
+.history-item:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+.history-item .h-main { flex: 1; min-width: 0; }
+.history-item .h-title { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history-item .h-meta { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history-item .h-icon { color: var(--muted); }
+.history-empty { color: var(--muted); text-align: center; padding: 40px 0; }
+.sheet-body > .history-item + .history-item { margin-top: -8px; }

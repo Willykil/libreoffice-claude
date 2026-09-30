@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 
-from claude_api import Cancelled, ClaudeError
+from claude_api import Cancelled, ClaudeError, supports_effort
 
 INSTALL_HELP = (
     "Claude Code isn't installed (or LibreOffice can't find it).\n\n"
@@ -60,7 +60,7 @@ def build_command(exe, settings, system_file):
     model = (settings.get("model") or "").strip()
     if model:
         cmd += ["--model", model]
-    if settings.get("effort"):
+    if settings.get("effort") and supports_effort(model):
         cmd += ["--effort", settings["effort"]]
     return cmd
 

@@ -220,12 +220,58 @@ class UnoTest(unittest.TestCase):
         self.assertNotIn("api_key", s)
         self.assertTrue(s["has_api_key"])
         s = self.api("/api/settings", {"backend": "claude_code", "effort": "high", "model": "",
-                                       "extra_instructions": "Write in Canadian French."})
-        self.assertEqual((s["backend"], s["effort"]), ("claude_code", "high"))
+                                       "instructions_writer": "Write in Canadian French.",
+                                       "track_changes": True})
+        self.assertEqual((s["backend"], s["effort"], s["track_changes"]), ("claude_code", "high", True))
         s = self.api("/api/settings", {"clear_api_key": True})
         self.assertFalse(s["has_api_key"])
-        self.assertEqual(claude_api.load_settings(self.settings_path)["extra_instructions"],
-                         "Write in Canadian French.")
+        stored = claude_api.load_settings(self.settings_path)
+        self.assertEqual(stored["instructions_writer"], "Write in Canadian French.")
+        self.assertEqual(stored["instructions_calc"], "")
+
+    def test_model_and_effort_pickers(self):
+        self.writer_with_selection()
+        state = self.api("/api/state")
+        self.assertEqual([m["label"] for m in state["models"]][:3], ["Opus 5.5", "Sonnet 5.5", "Haiku 4.5"])
+        self.assertIn({"id": "xhigh", "label": "Extra high"}, state["efforts"])
+        self.api("/api/settings", {"model": "claude-sonnet-5-5", "effort": "low"})
+        state = self.api("/api/state")
+        self.assertEqual((state["model"], state["effort"], state["effort_supported"]), ("claude-sonnet-5-5", "low", True))
+        self.api("/api/ask", {"instruction": "x"})
+        body = self.mock.requests[-1]["body"]
+        self.assertEqual((body["model"], body["output_config"]), ("claude-sonnet-5-5", {"effort": "low"}))
+        self.api("/api/settings", {"model": "claude-haiku-4-5"})
+        self.assertFalse(self.api("/api/state")["effort_supported"])
+        self.api("/api/ask", {"instruction": "x"})
+        self.assertNotIn("output_config", self.mock.requests[-1]["body"])
+
+    def test_per_app_instructions(self):
+        self.api("/api/settings", {"instructions_writer": "WRITER-RULE", "instructions_calc": "CALC-RULE"})
+        self.writer_with_selection()
+        self.api("/api/ask", {"instruction": "x"})
+        self.assertIn("WRITER-RULE", self.last_system())
+        self.assertNotIn("CALC-RULE", self.last_system())
+        self.calc_with_data()
+        self.api("/api/ask", {"instruction": "x"})
+        self.assertIn("CALC-RULE", self.last_system())
+
+    def test_old_single_instructions_migrate(self):
+        path = os.path.join(self.tmp, "old.json")
+        with open(path, "w") as f:
+            json.dump({"extra_instructions": "Be brief."}, f)
+        s = claude_api.load_settings(path)
+        self.assertEqual((s["instructions_writer"], s["instructions_calc"]), ("Be brief.", "Be brief."))
+
+    def test_history_saved_on_this_computer(self):
+        self.assertEqual(self.api("/api/history", {"clear": True}), {"conversations": []})
+        convo = {"id": "abc", "title": "Fix grammar", "messages": [{"role": "user", "text": "hi"}]}
+        self.api("/api/history", {"save": convo})
+        self.api("/api/history", {"save": dict(convo, id="def", title="Second")})
+        items = self.api("/api/history", {})["conversations"]
+        self.assertEqual([c["id"] for c in items], ["def", "abc"])      # newest first
+        self.api("/api/history", {"delete": "def"})
+        self.assertEqual([c["id"] for c in self.api("/api/history", {})["conversations"]], ["abc"])
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, "claude-panel-history.json")))
 
     # ---- Writer
 
@@ -264,9 +310,11 @@ class UnoTest(unittest.TestCase):
         self.assertEqual(res["text"], "This sentence has errors.\n\nSecond line.")
         self.assertIsNone(res["grid"])
         self.assertIn("<selection>\nthis sentense has erors\n</selection>", self.last_prompt())
+        self.assertIn("[P1] First paragraph stays.\n[P2] this sentense has erors", self.last_prompt())
+        self.assertIn("[P12]", self.last_system())
         self.assertIn(claude_actions.PROMPTS["improve"], self.last_prompt())
         self.assertIn("LibreOffice Writer", self.last_system())
-        self.assertEqual(self.api("/api/apply", {"text": res["text"], "mode": "replace"}), {"ok": True})
+        self.assertEqual(self.api("/api/apply", {"text": res["text"], "mode": "replace"}), {"ok": True, "tracked": False})
         self.assertEqual(self.paragraphs(doc),
                          ["First paragraph stays.", "This sentence has errors.", "", "Second line."])
         doc.getUndoManager().undo()   # one undo step reverts the whole insertion
@@ -295,7 +343,49 @@ class UnoTest(unittest.TestCase):
         table.getCellByName("A1").setString("Qty")
         table.getCellByName("B2").setString("42")
         self.api("/api/ask", {"action": "summarize"})
-        self.assertIn("<document>\nIntro text\nQty\t\n\t42", self.last_prompt())
+        self.assertIn("<document>\n[P1] Intro text\n[P2] (table)\nQty\t\n\t42", self.last_prompt())
+        self.assertIn("Nothing is selected.", self.last_prompt())
+
+    def test_comments_and_tracked_changes_are_read(self):
+        doc = self.open("swriter")
+        text = doc.getText()
+        text.setString("The fee is 100 dollars.")
+        note = doc.createInstance("com.sun.star.text.textfield.Annotation")
+        note.Author, note.Content = "Bob", "Too high?"
+        text.insertTextContent(text.getEnd(), note, False)
+        doc.RecordChanges = True
+        text.insertString(text.getEnd(), " Payable monthly.", False)
+        doc.RecordChanges = False
+        self.api("/api/ask", {"instruction": "Summarize the redlines"})
+        prompt = self.last_prompt()
+        self.assertIn("Comments in the document:\n- Bob: Too high?", prompt)
+        self.assertIn('Insertion by', prompt)
+        self.assertIn('" Payable monthly."', prompt)
+
+    def test_citations_jump_to_the_text(self):
+        doc = self.writer_with_selection()
+        self.api("/api/goto", {"ref": "P2"})
+        self.assertEqual(doc.getCurrentController().getSelection().getByIndex(0).getString(),
+                         "this sentense has erors")
+        self.api("/api/goto", {"ref": "P1-P2"})
+        self.assertEqual(doc.getCurrentController().getSelection().getByIndex(0).getString(),
+                         "First paragraph stays.\nthis sentense has erors")
+        self.assertIn("isn't in the document", self.api("/api/goto", {"ref": "P9"})["error"])
+
+    def test_tracked_changes_mode(self):
+        doc = self.writer_with_selection()
+        self.api("/api/settings", {"track_changes": True})
+        res = self.api("/api/apply", {"text": "This sentence has errors [P2].", "mode": "replace"})
+        self.assertEqual(res, {"ok": True, "tracked": True})
+        types = []
+        e = doc.getRedlines().createEnumeration()
+        while e.hasMoreElements():
+            types.append(e.nextElement().getPropertyValue("RedlineType"))
+        self.assertIn("Insert", types)
+        self.assertIn("Delete", types)
+        self.assertFalse(doc.RecordChanges)          # left as it was
+        self.assertIn("This sentence has errors.", doc.getText().getString())
+        self.assertNotIn("[P2]", doc.getText().getString())
 
     def test_errors_come_back_as_messages(self):
         self.writer_with_selection()
@@ -352,7 +442,7 @@ class UnoTest(unittest.TestCase):
         doc.getCurrentController().select(sheet.getCellRangeByName("A1:B3"))
         self.mock.text("```tsv\nTotal\t=SUM(B2:B3)\nTaxed\t=IF(B4>5,B4*1.2,\"n/a\")\n```")
         res = self.api("/api/ask", {"instruction": "add a total"})
-        self.assertIn('Sheet "Sheet1", selected range A1:B3:\n\tA\tB\n1\tItem\tPrice\n2\tTea\t3\n3\tCake\t4.5',
+        self.assertIn('Selected range Sheet1!A1:B3:\n\tA\tB\n1\tItem\tPrice\n2\tTea\t3\n3\tCake\t4.5',
                       self.last_prompt())
         self.assertIn("LibreOffice Calc", self.last_system())
         self.assertEqual(res["grid"], [["Total", "=SUM(B2:B3)"], ["Taxed", '=IF(B4>5,B4*1.2,"n/a")']])
@@ -367,14 +457,51 @@ class UnoTest(unittest.TestCase):
         doc.getCurrentController().select(sheet.getCellRangeByName("D2"))
         self.mock.text("| Name | Code |\n|---|---|\n| Bond | 007 |")
         res = self.api("/api/ask", {"instruction": "table"})
-        self.assertIn("cursor is on cell D2", self.last_prompt())
+        self.assertIn("the cursor is on cell Sheet1!D2", self.last_prompt())
         self.assertIn("3\tCake\t4.5", self.last_prompt())
         self.api("/api/apply", {"text": res["text"], "mode": "replace"})
+        written = doc.getCurrentController().getSelection().getRangeAddress()
+        self.assertEqual((written.StartColumn, written.StartRow, written.EndColumn, written.EndRow), (3, 1, 4, 2))
         self.assertEqual(sheet.getCellRangeByName("D2").getString(), "Name")
         self.assertEqual(sheet.getCellRangeByName("E3").getString(), "007")   # stays text
         self.assertEqual(sheet.getCellRangeByName("E3").getType().value, "TEXT")
         state = self.api("/api/state")
         self.assertIn("Find errors", [q["label"] for q in state["quick"]])
+
+    def test_calc_reads_every_sheet_and_jumps_to_cells(self):
+        doc, sheet = self.calc_with_data()
+        doc.getSheets().insertNewByName("Costs", 1)
+        costs = doc.getSheets().getByName("Costs")
+        costs.getCellRangeByName("A1").setString("Rent")
+        costs.getCellRangeByName("B1").setValue(900)
+        doc.getSheets().insertNewByName("Empty", 2)
+        doc.getCurrentController().select(sheet.getCellRangeByName("A1"))
+        self.api("/api/ask", {"instruction": "what's the rent?"})
+        prompt = self.last_prompt()
+        self.assertIn("Workbook sheets: Sheet1, Costs, Empty.", prompt)
+        self.assertIn('Sheet "Costs" (A1:B1):\n\tA\tB\n1\tRent\t900', prompt)
+        self.assertIn('Sheet "Empty" is empty.', prompt)
+        self.assertIn("[Data!C4]", self.last_system())
+        self.api("/api/goto", {"ref": "Costs!B1"})
+        ctl = doc.getCurrentController()
+        self.assertEqual(ctl.getActiveSheet().getName(), "Costs")
+        self.assertEqual(ctl.getSelection().getRangeAddress().StartColumn, 1)
+        self.api("/api/goto", {"ref": "Sheet1!$A$2:B3"})
+        addr = ctl.getSelection().getRangeAddress()
+        self.assertEqual((ctl.getActiveSheet().getName(), addr.StartRow, addr.EndRow), ("Sheet1", 1, 2))
+        self.assertIn("no sheet", self.api("/api/goto", {"ref": "Nope!A1"})["error"])
+
+    def test_calc_asks_before_overwriting(self):
+        doc, sheet = self.calc_with_data()
+        doc.getCurrentController().select(sheet.getCellRangeByName("A2"))
+        res = self.api("/api/apply", {"text": "X\tY", "mode": "replace"})
+        self.assertEqual(res, {"confirm": "This replaces 2 cells that already have content (A2:B2)."})
+        self.assertEqual(sheet.getCellRangeByName("A2").getString(), "Tea")     # untouched
+        self.assertTrue(self.api("/api/apply", {"text": "X\tY", "mode": "replace", "confirm": True})["ok"])
+        self.assertEqual(sheet.getCellRangeByName("A2").getString(), "X")
+        # Writing into empty cells needs no confirmation.
+        doc.getCurrentController().select(sheet.getCellRangeByName("A1:B3"))
+        self.assertTrue(self.api("/api/apply", {"text": "Total\t7.5", "mode": "after"})["ok"])
 
 
 if __name__ == "__main__":

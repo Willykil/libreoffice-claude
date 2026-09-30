@@ -20,14 +20,24 @@ DEFAULT_SETTINGS = {
     "claude_path": "",
     "effort": "medium",
     "max_tokens": 16000,
-    "extra_instructions": "",
+    "instructions_writer": "",    # standing instructions, kept separately per app like the M365 add-ins
+    "instructions_calc": "",
+    "track_changes": False,      # Writer: insert Claude's edits as tracked changes
     "base_url": "https://api.anthropic.com",
     "timeout_seconds": 300,
 }
 
 API_DEFAULT_MODEL = "claude-opus-5-5"
 MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-fable-5-1"]
+MODEL_LABELS = {"claude-opus-5-5": "Opus 5.5", "claude-sonnet-5-5": "Sonnet 5.5",
+                "claude-haiku-4-5": "Haiku 4.5", "claude-fable-5-1": "Fable 5.1"}
 EFFORTS = ["low", "medium", "high", "xhigh", "max"]
+EFFORT_LABELS = {"low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra high", "max": "Max"}
+
+
+def supports_effort(model):
+    """Haiku 4.5 has no effort control; everything current does."""
+    return "haiku" not in (model or "")
 
 # Models that accept the server-side refusal fallback ("default" mode).
 _FALLBACK_MODELS = ("claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5")
@@ -49,6 +59,10 @@ def load_settings(path):
             stored = json.load(f)
         if isinstance(stored, dict):
             settings.update({k: v for k, v in stored.items() if k in DEFAULT_SETTINGS})
+            # 0.3 had one "extra_instructions" for both apps.
+            old = stored.get("extra_instructions")
+            if old and "instructions_writer" not in stored and "instructions_calc" not in stored:
+                settings["instructions_writer"] = settings["instructions_calc"] = old
     except (OSError, ValueError):
         pass
     return settings
@@ -83,7 +97,7 @@ def build_request(settings, system, user_text):
         "anthropic-version": "2023-06-01",
     }
     # Haiku 4.5 rejects the effort parameter.
-    if settings.get("effort") and not model.startswith("claude-haiku"):
+    if settings.get("effort") and supports_effort(model):
         body["output_config"] = {"effort": settings["effort"]}
     if model in _FALLBACK_MODELS:
         body["fallbacks"] = "default"
