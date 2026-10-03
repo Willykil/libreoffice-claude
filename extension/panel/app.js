@@ -7,9 +7,18 @@ history.replaceState(null, "", "/?t=" + encodeURIComponent(TOKEN));   // a reloa
 
 const $ = (id) => document.getElementById(id);
 const thread = $("thread"), promptBox = $("prompt"), sendBtn = $("send");
+const D = window.ClaudeDiff;
 const ACTION_LABELS = { improve: "Improve writing", summarize: "Summarize", explain: "Explain" };
+const MODEL_INFO = {
+  "": ["Default", "Claude Code's default model"],
+  "claude-opus-5-5": ["Opus 5.5", "Best for careful writing and analysis"],
+  "claude-sonnet-5-5": ["Sonnet 5.5", "Fast and capable for everyday edits"],
+  "claude-haiku-4-5": ["Haiku 4.5", "Fastest, for quick fixes"],
+  "claude-fable-5-1": ["Fable 5.1", "Most capable, for the hardest tasks"],
+};
+const EFFORT_SHORT = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra", max: "Max" };
 
-let state = { doc: null, quick: [], connection: "subscription", models: [], efforts: [] };
+let state = { doc: null, quick: [], connection: "subscription", models: [], efforts: [], voice: {} };
 let busy = false;
 let chat = newChat();      // the conversation on screen; saved to history after each reply
 
@@ -54,30 +63,35 @@ function button(label, cls, iconName, onClick) {
   return b;
 }
 
-function toast(text) {
+function iconButton(name, label, onClick) {
+  const b = el("button", "btn quiet");
+  b.type = "button";
+  b.title = label;
+  b.setAttribute("aria-label", label);
+  b.appendChild(icon(name));
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+function toast(text, isError) {
   const t = $("toast");
-  t.replaceChildren(icon("check"), document.createTextNode(text));
+  t.replaceChildren(...(isError ? [] : [icon("check")]), document.createTextNode(text));
   t.classList.add("show");
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => t.classList.remove("show"), 2400);
+  toast.timer = setTimeout(() => t.classList.remove("show"), isError ? 4000 : 2400);
 }
 
 function scrollDown() { thread.scrollTop = thread.scrollHeight; }
+const isWriter = () => !!(state.doc && state.doc.kind === "writer");
+const hasSelection = () => !!(state.doc && state.doc.has_selection);
 
 /* ---------------------------------------------------------------- state */
 
-function fillSelect(select, items, value) {
-  const key = JSON.stringify(items);
-  if (select.dataset.key !== key) {
-    select.dataset.key = key;
-    select.replaceChildren(...items.map((i) => new Option(i.label, i.id)));
-  }
-  if (document.activeElement !== select) select.value = value;
-}
+function modelName(id) { return (MODEL_INFO[id] || [id])[0]; }
 
 function renderState() {
   const doc = state.doc;
-  $("context").classList.toggle("has-selection", !!(doc && doc.has_selection));
+  $("context").classList.toggle("has-selection", hasSelection());
   $("contextIcon").replaceChildren(...icon(doc && doc.kind === "calc" ? "sheet" : "doc").childNodes);
   $("docTitle").textContent = doc ? (doc.title || (doc.kind === "calc" ? "Spreadsheet" : "Document")) : "No document";
   $("ctxLabel").textContent = doc ? doc.label : "Open a Writer document or Calc spreadsheet.";
@@ -88,30 +102,37 @@ function renderState() {
     ? "Using your Anthropic API key (billed per use)"
     : "Using your Claude subscription";
 
-  // model / effort / tracked changes
-  fillSelect($("modelPick"), [{ id: "", label: "Default" }, ...state.models], state.model || "");
-  fillSelect($("effortPick"), state.efforts, state.effort);
-  $("effortPill").classList.toggle("disabled", !state.effort_supported);
-  $("effortPill").title = state.effort_supported
-    ? "Effort: how long Claude thinks before answering"
-    : "This model doesn't have an effort setting";
-  const track = $("trackToggle");
-  track.hidden = !(doc && doc.kind === "writer");
-  track.setAttribute("aria-pressed", String(!!state.track_changes));
+  // Rewrite as Formal | My voice (Writer)
+  $("tone").hidden = !isWriter();
+  const voice = state.voice || {};
+  for (const b of document.querySelectorAll(".tone-btn")) {
+    b.disabled = busy || !hasSelection();
+    b.title = hasSelection() ? "" : "Select the text to rewrite first";
+    b.classList.toggle("default", b.dataset.tone === "voice" && !!voice.default && !!voice.ready);
+  }
+
+  // model · effort selector, tracked tag
+  const effort = state.effort_supported ? " · " + (EFFORT_SHORT[state.effort] || state.effort) : "";
+  $("selectorLabel").textContent = modelName(state.model || "") + effort;
+  $("trackedTag").hidden = !(isWriter() && state.track_changes);
+  if (!$("popover").hidden) renderPopover();
 
   const chips = $("chips");
-  const key = JSON.stringify([state.quick.map((q) => q.label), doc && doc.has_selection, busy]);
+  const key = JSON.stringify([state.quick.map((q) => q.label), hasSelection(), busy]);
   if (chips.dataset.key !== key) {
     chips.dataset.key = key;
     chips.replaceChildren(...state.quick.map((q) => {
       const c = el("button", "chip", q.label);
       c.type = "button";
-      c.disabled = busy || (q.needs_selection && !(doc && doc.has_selection));
-      if (q.needs_selection && !(doc && doc.has_selection)) c.title = "Select some text first";
+      c.disabled = busy || (q.needs_selection && !hasSelection());
+      if (q.needs_selection && !hasSelection()) c.title = "Select some text first";
       c.addEventListener("click", () => ask({ instruction: q.prompt }, q.label));
       return c;
     }));
   }
+  const vline = voice.ready ? "Learned from " + voice.samples + " sample" + (voice.samples === 1 ? "" : "s")
+    : (voice.samples ? voice.samples + " sample" + (voice.samples === 1 ? "" : "s") + ", not learned yet" : "Not set up yet");
+  $("voiceStatusLine").textContent = vline;
   updateSend();
 }
 
@@ -133,21 +154,62 @@ async function saveSetting(body) {
   try {
     await api("/api/settings", body);
     await poll();
-  } catch (e) { addError(e.message); }
+  } catch (e) { toast(e.message, true); }
 }
 
-$("modelPick").addEventListener("change", (e) => saveSetting({ model: e.target.value }));
-$("effortPick").addEventListener("change", (e) => saveSetting({ effort: e.target.value }));
-$("trackToggle").addEventListener("click", async () => {
-  const on = !state.track_changes;
-  await saveSetting({ track_changes: on });
-  toast(on ? "Edits will be tracked changes" : "Edits go straight into the document");
-});
+/* ---------------------------------------------------------------- the model / effort popover */
+
+function renderPopover() {
+  const list = $("modelList");
+  const ids = ["", ...state.models.map((m) => m.id)];
+  list.replaceChildren(...ids.map((id) => {
+    const [name, desc] = MODEL_INFO[id] || [id, ""];
+    const b = el("button", "model");
+    b.type = "button";
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", String((state.model || "") === id));
+    const text = el("span", "model-text");
+    text.append(el("span", "model-name", name), el("span", "model-desc",
+      id === "" && state.connection === "api" ? "Opus 5.5" : desc));
+    b.append(text, icon("check", "check"));
+    b.addEventListener("click", () => saveSetting({ model: id }));
+    return b;
+  }));
+  const eff = $("effortList");
+  eff.classList.toggle("off", !state.effort_supported);
+  eff.title = state.effort_supported ? "How long Claude thinks before answering" : "This model has no effort setting";
+  eff.replaceChildren(...state.efforts.map((e) => {
+    const b = el("button", "", EFFORT_SHORT[e.id] || e.label);
+    b.type = "button";
+    b.title = e.label;
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-checked", String(state.effort === e.id));
+    b.addEventListener("click", () => saveSetting({ effort: e.id }));
+    return b;
+  }));
+  $("trackRow").hidden = !isWriter();
+  $("trackSwitch").checked = !!state.track_changes;
+}
+
+function togglePopover(open) {
+  const pop = $("popover");
+  const show = open === undefined ? pop.hidden : open;
+  pop.hidden = !show;
+  $("selector").setAttribute("aria-expanded", String(show));
+  if (show) renderPopover();
+}
+
+$("selector").addEventListener("click", (e) => { e.stopPropagation(); togglePopover(); });
+$("popover").addEventListener("click", (e) => e.stopPropagation());
+document.addEventListener("click", () => togglePopover(false));
+$("trackSwitch").addEventListener("change", (e) => saveSetting({ track_changes: e.target.checked }));
+$("trackedTag").addEventListener("click", () => saveSetting({ track_changes: false }));
 
 /* ---------------------------------------------------------------- citations */
 
 // [P12] / [P12-P14] in Writer answers; [B3], [B2:C9], [Data!C4], ['My sheet'!A1] in Calc answers.
 const CITE = /\[(P\d+(?:\s*[-–]\s*P?\d+)?|(?:(?:'(?:[^']|'')+'|[A-Za-z_][\w.]*)!)?\$?[A-Z]{1,3}\$?\d{1,7}(?::\$?[A-Z]{1,3}\$?\d{1,7})?)\]/g;
+const stripCites = (t) => t.replace(/\s?\[P\d+(?:\s*[-–]\s*P?\d+)?\]/g, "");
 
 function citeLabel(ref) {
   const m = /^P(\d+)(?:\s*[-–]\s*P?(\d+))?$/.exec(ref);
@@ -165,7 +227,7 @@ function richText(text) {
     b.title = "Show in the document";
     b.addEventListener("click", async () => {
       const res = await api("/api/goto", { ref: m[1] });
-      if (res.error) toast(res.error);
+      if (res.error) toast(res.error, true);
     });
     frag.appendChild(b);
     last = m.index + m[0].length;
@@ -201,6 +263,25 @@ function addThinking() {
   return { remove() { clearInterval(timer); m.remove(); } };
 }
 
+function cardShell(title) {
+  const card = el("div", "card");
+  const top = el("div", "card-top");
+  const t = el("span", "card-title", title);
+  top.append(icon("sparkle", "spark"), t, el("span", "spacer"));
+  const body = el("div");
+  const actions = el("div", "card-actions");
+  card.append(top, body, actions);
+  return { card, top, title: t, body, actions };
+}
+
+function wrapMsg(...nodes) {
+  const m = el("div", "msg");
+  m.append(...nodes);
+  thread.appendChild(m);
+  scrollDown();
+  return m;
+}
+
 function renderGrid(rows) {
   const wrap = el("div", "grid-wrap");
   const table = el("table", "grid");
@@ -215,52 +296,186 @@ function renderGrid(rows) {
   return wrap;
 }
 
-function addReply(res) {
-  const m = el("div", "msg");
-  const card = el("div", "card");
-  const head = el("div", "card-head");
-  head.append(icon("sparkle"), document.createTextNode("Claude"));
-  card.appendChild(head);
-  if (res.grid) card.appendChild(renderGrid(res.grid));
-  else {
-    const body = el("div", "card-body");
-    body.appendChild(richText(res.text));
-    card.appendChild(body);
-  }
-  if (res.truncated) card.appendChild(el("p", "card-note", "The reply was cut off at the length limit."));
-
-  const calc = res.kind === "calc";
-  const actions = el("div", "card-actions");
-  const primary = button(calc ? "Write at selection" : "Replace selection", "primary", null,
-    () => apply(res.text, "replace", primary, card));
-  const secondary = button(calc ? "Write below" : "Insert below", "", null,
-    () => apply(res.text, "after", secondary, card));
-  primary.title = calc ? "Write into the sheet starting at the selected cell" : "Replace the selected text (or insert at the cursor)";
-  secondary.title = calc ? "Write into the rows just below the selection" : "Insert as new paragraphs after the selection";
-  const copy = button("Copy", "quiet", "copy", async () => {
-    try { await navigator.clipboard.writeText(res.text); toast("Copied"); } catch (e) { toast("Couldn't copy"); }
+function copyButton(text) {
+  return iconButton("copy", "Copy", async () => {
+    try { await navigator.clipboard.writeText(text); toast("Copied"); } catch (e) { toast("Couldn't copy", true); }
   });
-  actions.append(primary, secondary, el("span", "spacer"), copy);
-  card.appendChild(actions);
-  m.appendChild(card);
-  thread.appendChild(m);
-  scrollDown();
 }
 
-function addError(text, openSettingsLink) {
-  const m = el("div", "msg");
-  const card = el("div", "card error");
-  const head = el("div", "card-head");
-  head.append(icon("sparkle"), document.createTextNode("Something went wrong"));
-  card.append(head, el("div", "card-body", text));
-  if (openSettingsLink) {
-    const actions = el("div", "card-actions");
-    actions.appendChild(button("Open settings", "", "gear", openSettings));
-    card.appendChild(actions);
+function addReply(res) {
+  if (res.grid) return addGridCard(res);
+  if (res.kind === "writer" && res.selection && res.selection.trim()) {
+    const proposed = stripCites(res.text);
+    const segs = D.diff(res.selection, proposed);
+    const sim = D.similarity(res.selection, segs);
+    if (res.tone || sim >= 0.3) return addRewriteCard(res, proposed, segs, sim);
   }
-  m.appendChild(card);
-  thread.appendChild(m);
-  scrollDown();
+  return addAnswerCard(res);
+}
+
+// Questions and drafts: text with clickable citations.
+function addAnswerCard(res) {
+  const c = cardShell("Claude");
+  const body = el("div", "card-body");
+  body.appendChild(richText(res.text));
+  c.body.appendChild(body);
+  if (res.truncated) c.body.appendChild(el("p", "card-note", "The reply was cut off at the length limit."));
+  const replace = button(res.selection ? "Replace selection" : "Insert at cursor", "primary", null,
+    () => apply(res.text, "replace", replace, c.card));
+  const below = button("Insert below", "", null, () => apply(res.text, "after", below, c.card));
+  c.actions.append(replace, below, el("span", "spacer"), copyButton(res.text));
+  wrapMsg(c.card);
+}
+
+// Calc: new cells previewed as a grid.
+function addGridCard(res) {
+  const c = cardShell(res.grid.length === 1 ? "1 row to write" : res.grid.length + " rows to write");
+  c.body.appendChild(renderGrid(res.grid));
+  if (res.truncated) c.body.appendChild(el("p", "card-note", "The reply was cut off at the length limit."));
+  const below = button("Write below", "primary", null, () => apply(res.text, "after", below, c.card));
+  const at = button("Write at selection", "", null, () => apply(res.text, "replace", at, c.card));
+  below.title = "Write into the rows just below the selection";
+  at.title = "Write into the sheet starting at the selected cell";
+  c.actions.append(below, at, el("span", "spacer"), copyButton(res.text));
+  wrapMsg(c.card);
+}
+
+// Writer rewrites: Changes (before/after) or Preview (on the page), and One by one.
+function addRewriteCard(res, proposed, segs, sim) {
+  const c = cardShell("");
+  const changes = D.changes(segs);
+  if (res.voice) {
+    const badge = el("span", "voice-badge");
+    badge.append(icon("voice"), document.createTextNode("Your voice"));
+    c.top.appendChild(badge);
+  }
+  const toggle = el("div", "toggle");
+  const tChanges = el("button", "", "Changes"), tPreview = el("button", "", "Preview");
+  for (const b of [tChanges, tPreview]) { b.type = "button"; toggle.appendChild(b); }
+  c.top.appendChild(toggle);
+  const where = res.paragraph ? "Replace ¶" + res.paragraph + " text" : "Replace selection";
+  let view = (changes.length <= 12 && sim >= 0.55) ? "changes" : "preview";
+  let accepted = changes.map(() => true);
+
+  function diffView() {
+    const box = el("div", "diff");
+    for (const s of segs) {
+      if ("eq" in s) { box.appendChild(document.createTextNode(s.eq)); continue; }
+      if (s.old) box.appendChild(el("del", "d", s.old));
+      if (s.new) box.appendChild(el("ins", "d", s.new));
+    }
+    return box;
+  }
+
+  function paper(text) {
+    const p = el("div", "paper");
+    if (res.before) p.appendChild(el("div", "faint before", "… " + res.before));
+    const n = el("div", "new");
+    n.appendChild(el("div", "", text));
+    p.appendChild(n);
+    if (res.after) p.appendChild(el("div", "faint after", res.after + " …"));
+    return p;
+  }
+
+  function oneByOne() {
+    const list = el("div", "hunks");
+    const result = el("div");
+    const apply3 = button("Apply", "primary", "check", () => apply(D.compose(segs, accepted), "replace", apply3, c.card));
+    function refresh() {
+      const n = accepted.filter(Boolean).length;
+      apply3.lastChild.textContent = n === changes.length ? "Apply all changes" : "Apply " + n + " change" + (n === 1 ? "" : "s");
+      apply3.disabled = n === 0;
+      result.replaceChildren(paper(D.compose(segs, accepted)));
+    }
+    let k = 0;
+    segs.forEach((s, idx) => {
+      if ("eq" in s) return;
+      const i = k++;
+      const row = el("div", "hunk");
+      const text = el("div", "hunk-text");
+      const prev = idx > 0 && "eq" in segs[idx - 1] ? segs[idx - 1].eq : "";
+      const before = D.tokens(prev);
+      const lead = before.slice(-4).join("");
+      if (lead.trim()) text.appendChild(el("span", "faint", (before.length > 4 ? "…" : "") + lead));
+      if (s.old) text.appendChild(el("del", "d", s.old));
+      if (s.new) text.appendChild(el("ins", "d", s.new));
+      const yes = el("button", "sq yes"), no = el("button", "sq nope");
+      yes.type = no.type = "button";
+      yes.setAttribute("aria-label", "Keep this change");
+      no.setAttribute("aria-label", "Skip this change");
+      yes.appendChild(icon("check"));
+      no.appendChild(icon("x"));
+      const sync = () => {
+        yes.setAttribute("aria-pressed", String(accepted[i]));
+        no.setAttribute("aria-pressed", String(!accepted[i]));
+        row.classList.toggle("no", !accepted[i]);
+      };
+      yes.addEventListener("click", () => { accepted[i] = true; sync(); refresh(); });
+      no.addEventListener("click", () => { accepted[i] = false; sync(); refresh(); });
+      sync();
+      row.append(text, yes, no);
+      list.appendChild(row);
+    });
+    c.title.textContent = "Review changes";
+    toggle.hidden = true;
+    c.body.replaceChildren(list, el("div", "result-label", "Result"), result);
+    c.actions.replaceChildren(apply3, button("Accept all", "", null, () => { accepted = accepted.map(() => true); oneByOne(); }),
+      el("span", "spacer"), button("Back", "quiet", null, () => { toggle.hidden = false; render(); }));
+    refresh();
+  }
+
+  function render() {
+    tChanges.setAttribute("aria-pressed", String(view === "changes"));
+    tPreview.setAttribute("aria-pressed", String(view === "preview"));
+    c.card.classList.remove("rejected");
+    if (view === "changes") {
+      c.title.textContent = changes.length === 1 ? "1 change" : changes.length + " changes";
+      c.body.replaceChildren(diffView());
+      const accept = button("Accept all", "primary", "check", () => apply(proposed, "replace", accept, c.card));
+      const reject = button("Reject", "", null, () => {
+        c.card.classList.add("rejected");
+        c.actions.replaceChildren(el("span", "status-note", "Rejected — nothing was changed"), el("span", "spacer"),
+          button("Undo", "quiet", null, render));
+      });
+      c.actions.replaceChildren(accept, reject, el("span", "spacer"));
+      if (changes.length > 1) c.actions.appendChild(button("One by one", "quiet", null, oneByOne));
+    } else {
+      c.title.textContent = "Rewritten";
+      c.body.replaceChildren(paper(proposed));
+      const replace = button(where, "primary", null, () => apply(proposed, "replace", replace, c.card));
+      const below = button("Insert below", "", null, () => apply(proposed, "after", below, c.card));
+      c.actions.replaceChildren(replace, below, el("span", "spacer"));
+      if (res.tone === "voice") c.actions.appendChild(button("Try Formal", "quiet", null, () => rewrite("formal")));
+      if (res.tone === "formal") c.actions.appendChild(button("Try My voice", "quiet", null, () => rewrite("voice")));
+      c.actions.appendChild(copyButton(proposed));
+    }
+    if (res.truncated) c.body.appendChild(el("p", "card-note", "The reply was cut off at the length limit."));
+  }
+  tChanges.addEventListener("click", () => { view = "changes"; render(); });
+  tPreview.addEventListener("click", () => { view = "preview"; render(); });
+  render();
+
+  const nodes = [c.card];
+  if (res.voice) {
+    const foot = el("div", "card-foot");
+    const edit = el("button", "link", "Edit");
+    edit.type = "button";
+    edit.addEventListener("click", openVoice);
+    foot.append(icon("voice"), document.createTextNode("Based on your writing profile · " + res.voice_samples +
+      " sample" + (res.voice_samples === 1 ? "" : "s") + " · "), edit);
+    nodes.push(foot);
+  }
+  wrapMsg(...nodes);
+}
+
+function addError(text, extra) {
+  const c = cardShell("Something went wrong");
+  c.card.classList.add("error");
+  c.body.appendChild(el("div", "card-body", text));
+  if (extra && extra.open_settings) c.actions.appendChild(button("Open settings", "", "gear", openSettings));
+  else if (extra && extra.open_voice) c.actions.appendChild(button("Set up My voice", "", "voice", openVoice));
+  else c.actions.remove();
+  wrapMsg(c.card);
 }
 
 function historyForApi() {
@@ -269,6 +484,7 @@ function historyForApi() {
 
 async function ask(body, shownText) {
   if (busy) return;
+  togglePopover(false);
   addUser(shownText || body.instruction);
   busy = true;
   renderState();
@@ -286,11 +502,12 @@ async function ask(body, shownText) {
     thread.lastElementChild.remove();       // drop the question that was stopped
     toast("Stopped");
   } else if (res.error) {
-    addError(res.error, res.open_settings);
+    addError(res.error, res);
   } else {
     const shown = shownText || body.instruction;
+    res.tone = body.tone || "";
     chat.messages.push({ role: "user", text: body.instruction || shown, shown },
-                       { role: "assistant", text: res.text, kind: res.kind, grid: res.grid, truncated: res.truncated });
+                       Object.assign({ role: "assistant" }, res));
     if (!chat.title) {
       chat.title = shown.length > 80 ? shown.slice(0, 77) + "…" : shown;
       chat.doc = state.doc ? state.doc.title : "";
@@ -303,6 +520,17 @@ async function ask(body, shownText) {
   promptBox.focus();
 }
 
+function rewrite(tone) {
+  if (tone === "voice" && !(state.voice && state.voice.ready)) {
+    openVoice();
+    toast("Add some of your own writing first, then let Claude learn it", true);
+    return;
+  }
+  ask({ tone }, tone === "voice" ? "Rewrite · My voice" : "Rewrite · Formal");
+}
+
+for (const b of document.querySelectorAll(".tone-btn")) b.addEventListener("click", () => rewrite(b.dataset.tone));
+
 async function apply(text, mode, btn, card, confirmed) {
   let res;
   try {
@@ -312,10 +540,10 @@ async function apply(text, mode, btn, card, confirmed) {
   }
   if (res.error) return addError(res.error);
   if (res.confirm) return askToOverwrite(res.confirm, () => apply(text, mode, btn, card, true), card);
-  const original = btn.textContent;
+  const original = [...btn.childNodes].map((n) => n.cloneNode(true));
   btn.replaceChildren(icon("check"), document.createTextNode(mode === "replace" ? "Done" : "Inserted"));
   btn.classList.add("done");
-  setTimeout(() => { btn.textContent = original; btn.classList.remove("done"); }, 1800);
+  setTimeout(() => { btn.replaceChildren(...original); btn.classList.remove("done"); }, 1800);
   toast(res.tracked ? "Added as tracked changes · accept or reject them in Writer"
                     : "Done · Ctrl+Z in LibreOffice undoes it");
 }
@@ -361,7 +589,8 @@ $("askForm").addEventListener("submit", (e) => {
   if (!text) return;
   promptBox.value = "";
   autosize();
-  ask({ instruction: text });
+  const v = state.voice || {};
+  ask(isWriter() && v.default && v.ready ? { instruction: text, tone: "voice" } : { instruction: text });
 });
 
 function showChat(c) {
@@ -381,16 +610,18 @@ $("newChat").addEventListener("click", () => {
   promptBox.focus();
 });
 
-/* ---------------------------------------------------------------- sheets (settings, history) */
+/* ---------------------------------------------------------------- sheets (settings, history, voice) */
+
+const SHEETS = ["settings", "history", "voice"];
 
 function openSheet(id) {
-  for (const s of ["settings", "history"]) $(s).hidden = s !== id;
+  togglePopover(false);
+  for (const s of SHEETS) $(s).hidden = s !== id;
   $("scrim").hidden = false;
 }
 
 function closeSheets() {
-  $("settings").hidden = true;
-  $("history").hidden = true;
+  for (const s of SHEETS) $(s).hidden = true;
   $("scrim").hidden = true;
 }
 
@@ -402,7 +633,7 @@ function showFor(backend) {
 
 async function openSettings() {
   let s;
-  try { s = await api("/api/settings"); } catch (e) { return addError(e.message); }
+  try { s = await api("/api/settings"); } catch (e) { return toast(e.message, true); }
   form.elements.backend.value = s.backend;
   form.elements.instructions_writer.value = s.instructions_writer || "";
   form.elements.instructions_calc.value = s.instructions_calc || "";
@@ -424,7 +655,7 @@ form.addEventListener("submit", async (e) => {
     instructions_calc: f.instructions_calc.value, claude_path: f.claude_path.value, max_tokens: f.max_tokens.value,
   };
   if (f.api_key.value.trim()) body.api_key = f.api_key.value.trim();
-  try { await api("/api/settings", body); } catch (err) { return addError(err.message); }
+  try { await api("/api/settings", body); } catch (err) { return toast(err.message, true); }
   closeSheets();
   toast("Settings saved");
   poll();
@@ -439,6 +670,7 @@ $("clearHistory").addEventListener("click", async () => {
   await api("/api/history", { clear: true });
   toast("Chat history cleared");
 });
+$("openVoiceFromSettings").addEventListener("click", openVoice);
 
 function when(ts) {
   const mins = Math.round((Date.now() / 1000 - ts) / 60);
@@ -450,7 +682,7 @@ function when(ts) {
 
 async function openHistory() {
   let data;
-  try { data = await api("/api/history", {}); } catch (e) { return addError(e.message); }
+  try { data = await api("/api/history", {}); } catch (e) { return toast(e.message, true); }
   const list = $("historyList");
   const items = data.conversations || [];
   if (!items.length) {
@@ -483,13 +715,120 @@ async function openHistory() {
   openSheet("history");
 }
 
+/* My voice (K) */
+
+const SOURCE = { selection: "From a selection", document: "Whole document", file: "File" };
+let voiceData = null;
+let learning = false;
+
+function renderVoice(v) {
+  voiceData = v;
+  const n = v.samples.length;
+  let title, sub;
+  if (v.ready && !v.stale) {
+    title = "Claude can write like you";
+    sub = "Learned from " + n + " sample" + (n === 1 ? "" : "s") + " · updated " + when(v.updated);
+  } else if (v.ready) {
+    title = "Your samples changed";
+    sub = "Press Relearn to include them";
+  } else if (n) {
+    title = "Ready to learn";
+    sub = "Press Learn my style. More of your writing gives a better match.";
+  } else {
+    title = "Teach Claude how you write";
+    sub = "Add a few things you wrote yourself. Two or three pages works best.";
+  }
+  $("voiceTitle").textContent = title;
+  $("voiceSub").textContent = sub;
+  const list = $("sampleList");
+  if (!n) list.replaceChildren(el("div", "samples-empty", "No samples yet."));
+  else list.replaceChildren(...v.samples.map((s) => {
+    const row = el("div", "sample");
+    const text = el("div", "sample-text");
+    const meta = s.words.toLocaleString() + " words · " + (SOURCE[s.source] || s.source) +
+      (s.partly_used ? " · the first 20,000 characters are used" : "");
+    text.append(el("div", "sample-name", s.name), el("div", "sample-meta", meta));
+    const rm = iconButton("x", "Remove " + s.name, () => voiceCall({ remove: s.id }));
+    row.append(icon("doc"), text, rm);
+    return row;
+  }));
+  const learn = $("learnVoice");
+  learn.textContent = learning ? "Learning…" : (v.ready ? "Relearn" : "Learn my style");
+  learn.disabled = learning || !n;
+  if (document.activeElement !== $("profile")) $("profile").value = v.profile || "";
+  $("voiceDefault").checked = !!v.default;
+  $("addSelection").disabled = !(isWriter() && hasSelection());
+  $("addDocument").disabled = !isWriter();
+}
+
+async function voiceCall(body) {
+  let v;
+  try { v = await api("/api/voice", body); } catch (e) { return toast(e.message, true); }
+  if (v.error) toast(v.error, true);
+  if (v.samples) renderVoice(v);
+  poll();
+  return v;
+}
+
+async function openVoice() {
+  openSheet("voice");
+  await voiceCall({});
+}
+
+$("closeVoice").addEventListener("click", closeSheets);
+$("voiceDone").addEventListener("click", closeSheets);
+$("addSelection").addEventListener("click", async () => {
+  const v = await voiceCall({ add: "selection" });
+  if (v && !v.error) toast("Selection added");
+});
+$("addDocument").addEventListener("click", async () => {
+  const v = await voiceCall({ add: "document" });
+  if (v && !v.error) toast("Document added");
+});
+$("addFiles").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", async (e) => {
+  for (const file of [...e.target.files]) {
+    const data = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(",")[1] || "");
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    }).catch(() => null);
+    if (data === null) { toast("Couldn't read " + file.name, true); continue; }
+    const v = await voiceCall({ add: "file", name: file.name, data });
+    if (v && !v.error) toast(file.name + " added");
+  }
+  e.target.value = "";
+});
+$("learnVoice").addEventListener("click", async () => {
+  learning = true;
+  renderVoice(voiceData);
+  try {
+    const v = await api("/api/voice", { learn: true });
+    learning = false;
+    if (v.error) toast(v.error, true);
+    else if (v.cancelled) toast("Stopped");
+    else toast("Claude learned your style");
+    if (v.samples) renderVoice(v);
+  } catch (e) {
+    learning = false;
+    toast(e.message, true);
+    renderVoice(voiceData);
+  }
+  poll();
+});
+$("profile").addEventListener("change", (e) => voiceCall({ profile: e.target.value }));
+$("voiceDefault").addEventListener("change", (e) => voiceCall({ default: e.target.checked }));
+
 $("openSettings").addEventListener("click", openSettings);
 $("openHistory").addEventListener("click", openHistory);
 $("closeSettings").addEventListener("click", closeSheets);
 $("closeHistory").addEventListener("click", closeSheets);
 $("cancelSettings").addEventListener("click", closeSheets);
 $("scrim").addEventListener("click", closeSheets);
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSheets(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { closeSheets(); togglePopover(false); }
+});
 
 /* ---------------------------------------------------------------- start */
 

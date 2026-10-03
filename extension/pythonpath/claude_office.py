@@ -64,11 +64,16 @@ def system_prompt(kind, extra=""):
 class Context:
     """What gets sent to Claude, plus where to put the answer."""
 
-    def __init__(self, kind, text, has_selection, label):
+    def __init__(self, kind, text, has_selection, label, selection="", paragraph=None, before="", after=""):
         self.kind = kind
         self.text = text
         self.has_selection = has_selection
-        self.label = label          # one line for the dialog, e.g. "Selection: 42 words"
+        self.label = label          # one line for the panel, e.g. "Selection: 42 words"
+        # Writer only, for the panel's before/after view and page preview:
+        self.selection = selection  # the selected text as it is now
+        self.paragraph = paragraph  # [P<n>] number of the paragraph the selection starts in
+        self.before = before        # the end of the paragraph before it
+        self.after = after          # the start of the paragraph after it
 
 
 def get_context(doc):
@@ -101,10 +106,47 @@ def _writer_context(doc):
     words = sum(len(text.split()) for _, text, _ in paras)
     if selected.strip():
         parts.append("The user has selected this text:\n<selection>\n%s\n</selection>" % selected)
-        return Context(WRITER, "\n\n".join(parts), True, "Selection: %d words" % len(selected.split()))
+        number, before, after = _selection_neighbours(doc, paras)
+        where = " in \u00b6%d" % number if number else ""
+        return Context(WRITER, "\n\n".join(parts), True, "Selection: %d words%s" % (len(selected.split()), where),
+                       selection=selected, paragraph=number, before=before, after=after)
     parts.append("Nothing is selected.")
     return Context(WRITER, "\n\n".join(parts), False,
                    "No selection - Claude reads the whole document (%d words)" % words)
+
+
+def _selection_neighbours(doc, paras):
+    """(paragraph number, end of the paragraph before, start of the one after) for the selection."""
+    ranges = _writer_ranges(doc)
+    if not ranges:
+        return None, "", ""
+    text = doc.getText()
+    point = ranges[0].getStart()
+    for i, (n, _, el) in enumerate(paras):
+        if el.supportsService("com.sun.star.text.TextTable"):
+            continue
+        try:
+            inside = text.compareRegionStarts(el, point) >= 0 and text.compareRegionEnds(point, el) >= 0
+        except Exception:          # selection in a table, frame or footnote: another text
+            return None, "", ""
+        if inside:
+            prev = next((t for _, t, e in reversed(paras[:i])
+                         if not e.supportsService("com.sun.star.text.TextTable")), "")
+            nxt = next((t for _, t, e in paras[i + 1:]
+                        if not e.supportsService("com.sun.star.text.TextTable")), "")
+            return n, prev[-160:], nxt[:160]
+    return None, "", ""
+
+
+def document_text(doc):
+    """Plain text of a Writer document's main text, for learning a writing voice from it."""
+    return "\n".join(t.split(") ", 1)[1] if t.startswith("(Heading") or t.startswith("(Title)") else t
+                     for _, t, el in writer_paragraphs(doc)
+                     if not el.supportsService("com.sun.star.text.TextTable"))
+
+
+def selected_text(doc):
+    return "\n".join(r.getString() for r in _writer_ranges(doc) if r.getString())
 
 
 def writer_paragraphs(doc):

@@ -12,14 +12,14 @@ PROMPTS = {
 
 _REWRITE = " Keep the same language unless asked otherwise. Reply with only the new text."
 
-# Buttons in the Ask dialog: (label, prompt, needs a selection)
+# The panel's quick-action chips: (label, prompt, needs a selection). Writer's formal and
+# my-voice rewrites are the separate "Rewrite as" toggle (claude_voice.py).
 QUICK_ACTIONS = {
     claude_office.WRITER: [
         ("Improve", PROMPTS["improve"], True),
         ("Fix grammar", "Correct the spelling, grammar and punctuation of the selected text and change "
                         "nothing else." + _REWRITE, True),
         ("Make shorter", "Make the selected text noticeably shorter while keeping its key points." + _REWRITE, True),
-        ("More formal", "Rewrite the selected text in a more formal, professional tone." + _REWRITE, True),
         ("Simplify", "Rewrite the selected text so it is simpler and easier to read." + _REWRITE, True),
         ("Translate FR \u2194 EN", "If the selected text is in French, translate it into English; otherwise "
                                     "translate it into French. Reply with only the translation.", True),
