@@ -22,18 +22,24 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, urlparse
 
+import base64
+import tempfile
+
 import claude_actions
 import claude_api
 import claude_office
+import claude_voice
 
 PANEL_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "panel"))
 STATIC = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/diff.js": ("diff.js", "text/javascript; charset=utf-8"),
     "/style.css": ("style.css", "text/css; charset=utf-8"),
 }
 PANEL_WIDTH, PANEL_HEIGHT = 440, 860
 SEEN_WINDOW = 4.0      # seconds: a panel that polled this recently counts as open
+MAX_BODY = 32 * 1024 * 1024     # a 20 MB document, base64-encoded, plus room
 
 
 class PanelServer:
@@ -106,6 +112,8 @@ class PanelServer:
                "efforts": [{"id": e, "label": claude_api.EFFORT_LABELS[e]} for e in claude_api.EFFORTS]}
         if model and model not in claude_api.MODELS:
             out["models"].append({"id": model, "label": model})
+        voice = claude_voice.summary(claude_voice.load(self._voice_path()))
+        out["voice"] = {"ready": voice["ready"], "default": voice["default"], "samples": len(voice["samples"])}
         doc = self.document()
         if doc is not None:
             try:
@@ -123,6 +131,17 @@ class PanelServer:
         instruction = (body.get("instruction") or "").strip()
         if body.get("action") in claude_actions.PROMPTS:
             instruction = claude_actions.PROMPTS[body["action"]]
+        tone = body.get("tone")
+        if tone == "formal" and not instruction:
+            instruction = claude_voice.FORMAL_REWRITE
+        voice = None
+        if tone == "voice":
+            voice = claude_voice.load(self._voice_path())
+            if not voice["profile"].strip():
+                return {"error": "Claude doesn't know your writing voice yet. Add a few things you wrote, "
+                                 "then let it learn.", "open_voice": True}
+            if not instruction:
+                instruction = claude_voice.VOICE_REWRITE
         if not instruction:
             return {"error": "Type what you'd like Claude to do."}
         doc = self.document()
@@ -137,22 +156,13 @@ class PanelServer:
             return {"error": "Add your Anthropic API key in Settings, or switch the connection to "
                              "Claude Code to use your Claude subscription.", "open_settings": True}
         system = claude_office.system_prompt(context.kind, settings.get("instructions_" + context.kind))
+        if voice is not None:
+            system += claude_voice.system_addition(voice)
         user_text = conversation_prompt(context.text, body.get("history") or [], instruction)
 
-        cancel = threading.Event()
-        with self._lock:
-            if self._request is not None:
-                return {"error": "Claude is still working on the previous request."}
-            self._request = cancel
-        try:
-            result = _run_cancellable(lambda: claude_api.ask(settings, system, user_text, cancel), cancel)
-        except claude_api.Cancelled:
-            return {"cancelled": True}
-        except claude_api.ClaudeError as e:
-            return {"error": str(e)}
-        finally:
-            with self._lock:
-                self._request = None
+        result = self._claude(settings, system, user_text)
+        if isinstance(result, dict):
+            return result
         text, truncated = result
         if not text:
             return {"error": "Claude returned an empty reply."}
@@ -161,7 +171,125 @@ class PanelServer:
             rows = claude_office.parse_grid(text)
             if any(len(r) > 1 for r in rows):
                 grid = rows
-        return {"text": text, "truncated": truncated, "kind": context.kind, "grid": grid}
+        return {"text": text, "truncated": truncated, "kind": context.kind, "grid": grid,
+                "selection": context.selection, "paragraph": context.paragraph,
+                "before": context.before, "after": context.after,
+                "voice": voice is not None, "voice_samples": len(voice["samples"]) if voice else 0}
+
+    def _claude(self, settings, system, user_text):
+        """Run one Claude request (one at a time; Stop cancels it). (text, truncated) or an error dict."""
+        cancel = threading.Event()
+        with self._lock:
+            if self._request is not None:
+                return {"error": "Claude is still working on the previous request."}
+            self._request = cancel
+        try:
+            return _run_cancellable(lambda: claude_api.ask(settings, system, user_text, cancel), cancel)
+        except claude_api.Cancelled:
+            return {"cancelled": True}
+        except claude_api.ClaudeError as e:
+            return {"error": str(e)}
+        finally:
+            with self._lock:
+                self._request = None
+
+    # ------------------------------------------------------------ My voice
+
+    MAX_UPLOAD = 20 * 1024 * 1024
+    TEXT_FILES = (".txt", ".md")
+    OFFICE_FILES = (".odt", ".docx", ".doc", ".rtf", ".fodt", ".ott", ".dotx")
+
+    def _voice_path(self):
+        return claude_voice.path_for(self.settings_path)
+
+    def voice(self, body):
+        path = self._voice_path()
+        if body.get("learn"):
+            return self._learn_voice(path)
+        with self._lock:
+            data = claude_voice.load(path)
+        error = None
+        if body.get("add") in ("selection", "document"):
+            doc = self.document()
+            if doc is None or claude_office.doc_kind(doc) != claude_office.WRITER:
+                return {"error": "Open a Writer document first."}
+            title = self._title(doc) or "Untitled document"
+            if body["add"] == "selection":
+                text, name = claude_office.selected_text(doc), "Selection from %s" % title
+            else:
+                text, name = claude_office.document_text(doc), title
+            _, error = claude_voice.add_sample(data, name, body["add"], text)
+        elif body.get("add") == "file":
+            name = os.path.basename(str(body.get("name") or "document"))
+            try:
+                raw = base64.b64decode(body.get("data") or "", validate=True)
+            except ValueError:
+                return {"error": "Couldn't read that file."}
+            if len(raw) > self.MAX_UPLOAD:
+                return {"error": "That file is over 20 MB."}
+            text, error = self._file_text(name, raw)
+            if text is not None:
+                _, error = claude_voice.add_sample(data, name, "file", text)
+        elif body.get("remove"):
+            claude_voice.remove_sample(data, body["remove"])
+        if "profile" in body:
+            data["profile"] = str(body["profile"])
+        if "default" in body:
+            data["default"] = bool(body["default"])
+        with self._lock:
+            claude_voice.save(path, data)
+        out = claude_voice.summary(data)
+        if error:
+            out["error"] = error
+        return out
+
+    def _learn_voice(self, path):
+        data = claude_voice.load(path)
+        if not data["samples"]:
+            return dict(claude_voice.summary(data), error="Add some of your own writing first.")
+        settings = claude_api.load_settings(self.settings_path)
+        system, user_text = claude_voice.learn_request(data)
+        result = self._claude(settings, system, user_text)
+        if isinstance(result, dict):
+            return dict(claude_voice.summary(data), **result)
+        claude_voice.finish_learning(data, result[0])
+        with self._lock:
+            claude_voice.save(path, data)
+        return claude_voice.summary(data)
+
+    def _file_text(self, name, raw):
+        """(text, None) or (None, reason): plain text files directly, documents through LibreOffice."""
+        ext = os.path.splitext(name)[1].lower()
+        if ext in self.TEXT_FILES:
+            return raw.decode("utf-8", "replace"), None
+        if ext not in self.OFFICE_FILES:
+            return None, "Add a text document: .odt, .docx, .doc, .rtf or .txt."
+        fd, tmp = tempfile.mkstemp(suffix=ext, prefix="claude-voice-")
+        doc = None
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(raw)
+            import uno
+            from com.sun.star.beans import PropertyValue
+            hidden = PropertyValue()
+            hidden.Name, hidden.Value = "Hidden", True
+            desktop = self.ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", self.ctx)
+            doc = desktop.loadComponentFromURL(uno.systemPathToFileUrl(tmp), "_blank", 0, (hidden,))
+            if claude_office.doc_kind(doc) != claude_office.WRITER:
+                return None, "That isn't a text document."
+            return claude_office.document_text(doc), None
+        except Exception:
+            return None, "LibreOffice couldn't open %s." % name
+        finally:
+            if doc is not None:
+                try:
+                    doc.close(True)
+                except Exception:
+                    pass
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
     def cancel(self):
         req = self._request
@@ -357,6 +485,8 @@ def _handler(panel):
                 return self._send(403, {"error": "forbidden"})
             try:
                 length = int(self.headers.get("Content-Length") or 0)
+                if length > MAX_BODY:
+                    return self._send(413, {"error": "That's too large to send."})
                 body = json.loads(self.rfile.read(length) or b"{}") if length else {}
                 if not isinstance(body, dict):
                     raise ValueError
@@ -364,7 +494,7 @@ def _handler(panel):
                 return self._send(400, {"error": "bad request"})
             routes = {"/api/ask": panel.ask, "/api/apply": panel.apply, "/api/settings": panel.set_settings,
                       "/api/cancel": lambda b: panel.cancel(), "/api/goto": panel.goto,
-                      "/api/history": panel.history}
+                      "/api/history": panel.history, "/api/voice": panel.voice}
             fn = routes.get(urlparse(self.path).path)
             if fn is None:
                 return self._send(404, {"error": "not found"})

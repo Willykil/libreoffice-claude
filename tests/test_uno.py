@@ -5,6 +5,7 @@ Needs LibreOffice (soffice) and python3-uno. Talks to a local mock API or a
 fake `claude`, never the real service.
 """
 
+import base64
 import http.client
 import json
 import os
@@ -30,6 +31,7 @@ import build  # noqa: E402
 import claude_actions  # noqa: E402
 import claude_api  # noqa: E402
 import claude_panel  # noqa: E402
+import claude_voice  # noqa: E402
 from mock_server import MockClaude  # noqa: E402
 
 
@@ -129,6 +131,9 @@ class UnoTest(unittest.TestCase):
     def setUp(self):
         self.mock.requests.clear()
         self.mock.text("ok")
+        voice = claude_voice.path_for(self.settings_path)
+        if os.path.exists(voice):
+            os.remove(voice)
         claude_api.save_settings(self.settings_path, dict(claude_api.DEFAULT_SETTINGS, backend=claude_api.API,
                                                           api_key="sk-test", base_url=self.mock.url))
 
@@ -296,12 +301,14 @@ class UnoTest(unittest.TestCase):
         self.writer_with_selection()
         state = self.api("/api/state")
         self.assertEqual(state["doc"]["kind"], "writer")
-        self.assertEqual(state["doc"]["label"], "Selection: 4 words")
+        self.assertEqual(state["doc"]["label"], "Selection: 4 words in \u00b62")
         self.assertTrue(state["doc"]["has_selection"])
         self.assertEqual(state["connection"], "api")
         quick = {q["label"]: q for q in state["quick"]}
         self.assertTrue(quick["Fix grammar"]["needs_selection"])
         self.assertFalse(quick["Summarize"]["needs_selection"])
+        self.assertNotIn("More formal", quick)          # the "Rewrite as" toggle does that now
+        self.assertEqual(state["voice"], {"ready": False, "default": False, "samples": 0})
 
     def test_ask_then_replace_selection(self):
         doc = self.writer_with_selection()
@@ -424,6 +431,102 @@ class UnoTest(unittest.TestCase):
             for k in ("FAKE_CLAUDE_REPLY", "FAKE_CLAUDE_MODE"):
                 os.environ.pop(k, None)
         self.assertEqual(self.mock.requests, [])
+
+    # ---- rewrites: the selection's context, Formal and My voice
+
+    MINE = ("Bon, on va faire simple. Chaque mois, vous parlez d’un sujet d’actualité pendant cinq minutes, "
+            "pas plus. On vise clair et direct, sans détour. Si ça accroche, on en jase après l’émission.")
+
+    def writer_long(self):
+        doc = self.open("swriter")
+        text = doc.getText()
+        text.setString("Mise en situation")
+        for para in (self.MINE, "La radio etudiante du college cherche du monde.", "Les sujets suivent."):
+            cur = text.createTextCursorByRange(text.getEnd())
+            text.insertControlCharacter(cur, 0, False)
+            text.insertString(cur, para, False)
+        e = text.createEnumeration()
+        paras = [e.nextElement() for _ in range(4)]
+        doc.getCurrentController().select(paras[2])
+        return doc, paras
+
+    def test_reply_carries_the_selection_and_its_neighbours(self):
+        self.writer_long()
+        self.mock.text("La radio étudiante du collège cherche du monde.")
+        res = self.api("/api/ask", {"instruction": "Fix grammar"})
+        self.assertEqual(res["selection"], "La radio etudiante du college cherche du monde.")
+        self.assertEqual(res["paragraph"], 3)
+        self.assertTrue(res["before"].endswith("on en jase après l’émission."))
+        self.assertEqual(res["after"], "Les sujets suivent.")
+        self.assertFalse(res["voice"])
+
+    def test_formal_rewrite(self):
+        self.writer_long()
+        self.api("/api/ask", {"tone": "formal"})
+        self.assertTrue(self.last_prompt().endswith(claude_voice.FORMAL_REWRITE))
+        self.assertNotIn("<profile>", self.last_system())
+
+    def test_my_voice_needs_learning_first(self):
+        self.writer_long()
+        res = self.api("/api/ask", {"tone": "voice"})
+        self.assertTrue(res["open_voice"])
+        self.assertEqual(self.mock.requests, [])
+
+    def test_my_voice_samples_learning_and_rewrite(self):
+        doc, paras = self.writer_long()
+        # too short a selection is refused, a real paragraph is kept, duplicates are refused
+        doc.getCurrentController().select(paras[0])
+        self.assertIn("at least 20 words", self.api("/api/voice", {"add": "selection"})["error"])
+        doc.getCurrentController().select(paras[1])
+        v = self.api("/api/voice", {"add": "selection"})
+        self.assertEqual([(x["source"], x["words"]) for x in v["samples"]], [("selection", len(self.MINE.split()))])
+        self.assertIn("already", self.api("/api/voice", {"add": "selection"})["error"])
+        # whole document, a .txt and a real .odt through LibreOffice
+        v = self.api("/api/voice", {"add": "document"})
+        txt = ("Texte que j’ai écrit moi-même pour tester. " * 5).encode("utf-8")
+        v = self.api("/api/voice", {"add": "file", "name": "notes.txt", "data": base64.b64encode(txt).decode()})
+        odt_path = os.path.join(self.tmp, "mine.odt")
+        doc.storeToURL(uno.systemPathToFileUrl(odt_path), (_prop("FilterName", "writer8"),))
+        with open(odt_path, "rb") as f:
+            odt = base64.b64encode(f.read()).decode()
+        v = self.api("/api/voice", {"add": "file", "name": "mine.odt", "data": odt})
+        self.assertIn("already", v["error"])          # same text as the whole document
+        bad = self.api("/api/voice", {"add": "file", "name": "x.png", "data": base64.b64encode(b"123").decode()})
+        self.assertIn(".odt", bad["error"])
+        self.assertEqual([x["source"] for x in v["samples"]], ["selection", "document", "file"])
+        self.assertTrue(v["stale"])
+        self.assertFalse(v["ready"])
+        self.assertNotIn("text", v["samples"][0])      # the panel never gets the samples back
+
+        # learning sends the samples and stores what Claude says
+        self.mock.text("- Phrases courtes\n- « on » plutôt que « nous »")
+        v = self.api("/api/voice", {"learn": True})
+        self.assertEqual(v["profile"], "- Phrases courtes\n- « on » plutôt que « nous »")
+        self.assertTrue(v["ready"])
+        self.assertFalse(v["stale"])
+        self.assertIn(claude_voice.LEARN_SYSTEM, self.last_system())
+        self.assertIn("on en jase après", self.last_prompt())
+        self.assertEqual(self.api("/api/state")["voice"], {"ready": True, "default": False, "samples": 3})
+
+        # rewriting in my voice sends the profile and excerpts of my own writing
+        doc.getCurrentController().select(paras[2])
+        self.mock.text("La radio du collège cherche du monde, tout simplement.")
+        res = self.api("/api/ask", {"tone": "voice"})
+        self.assertTrue(res["voice"])
+        self.assertEqual(res["voice_samples"], 3)
+        system = self.last_system()
+        self.assertIn("<profile>\n- Phrases courtes", system)
+        self.assertIn("<excerpt>\nBon, on va faire simple.", system)
+        self.assertTrue(self.last_prompt().endswith(claude_voice.VOICE_REWRITE))
+
+        # editing the profile, the default switch, removing a sample
+        v = self.api("/api/voice", {"profile": "- Edited by me", "default": True})
+        self.assertEqual((v["profile"], v["default"]), ("- Edited by me", True))
+        v = self.api("/api/voice", {"remove": v["samples"][2]["id"]})
+        self.assertEqual(len(v["samples"]), 2)
+        self.assertTrue(v["stale"])
+        with open(claude_voice.path_for(self.settings_path), encoding="utf-8") as f:
+            self.assertIn("Bon, on va faire simple.", f.read())    # kept on this computer
 
     # ---- Calc
 
