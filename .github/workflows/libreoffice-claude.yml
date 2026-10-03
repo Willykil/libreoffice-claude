@@ -1,0 +1,31 @@
+name: libreoffice-claude
+
+on:
+  push:
+    branches: [main]
+    paths: ["libreoffice-claude/**", ".github/workflows/libreoffice-claude.yml"]
+  pull_request:
+    paths: ["libreoffice-claude/**", ".github/workflows/libreoffice-claude.yml"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: libreoffice-claude/tests
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LibreOffice and python3-uno
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            libreoffice-writer libreoffice-calc python3-uno
+      # System python3: python3-uno is built for it, not for setup-python's interpreters.
+      - name: Committed .oxt matches extension/
+        run: /usr/bin/python3 -m unittest test_build -v
+      - name: Python tests
+        run: /usr/bin/python3 -m unittest test_api test_cli test_uno -v
+      - name: Panel diff tests
+        run: node test_diff.js
