@@ -530,9 +530,26 @@ class NativePanel:
             elif res.get("open_settings"):
                 self.open_full("settings")
             return
-        self.reply = res
         self.history += [{"role": "user", "text": body.get("instruction") or shown},
-                         {"role": "assistant", "text": res["text"]}]
+                         {"role": "assistant", "text": res.get("history_text") or res["text"]}]
+        if res.get("edits"):
+            # Claude changed the document itself; there's nothing left to place.
+            self.reply = None
+            edits = res["edits"]
+            lines = [res["text"]] + ["\u2713 " + l for l in edits["done"]] + ["\u2717 " + l for l in edits["failed"]]
+            self.c["reply"].setText("\n".join(lines))
+            for name in ("replace", "insert", "copy"):
+                if name in self.c:
+                    self.c[name].getModel().Enabled = False
+            n = len(edits["done"])
+            if not n:
+                self.note("No edits were made.")
+            elif edits.get("tracked"):
+                self.note("%d edit%s made as tracked changes - accept or reject them in Writer." % (n, "" if n == 1 else "s"))
+            else:
+                self.note("%d edit%s made - Ctrl+Z undoes them." % (n, "" if n == 1 else "s"))
+            return
+        self.reply = res
         self.c["reply"].setText(res["text"])
         for name in ("replace", "insert", "copy"):
             if name in self.c:

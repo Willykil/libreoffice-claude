@@ -18,6 +18,17 @@ is never moved or resized.
 The full panel follows your light/dark theme. It shows what Claude will read (your selection,
 or the whole document / the sheet's filled area when nothing is selected) and offers:
 
+- **Claude edits the document itself**, like the Word and Excel add-ins. Ask "highlight the key
+  ideas in yellow", "underline the thesis and bold the connectors", "comment on the weak
+  arguments", "replace *colour* with *color* everywhere", "make the headings Heading 2", or in
+  Calc "add a totals row and make the header bold with a yellow fill". Claude makes the changes
+  straight away and lists them in the panel, including anything it couldn't find. **Undo** (or
+  Ctrl+Z once) takes all of them back; with *Edits as tracked changes* on, Writer records them as
+  changes to accept or reject. Writer: bold, italic, underline, strikethrough, highlight, text
+  color, font, size, alignment, paragraph styles, find and replace, inserting and deleting
+  paragraphs, comments. Calc: values and formulas, bold/italic/underline, text and fill colors,
+  number formats, alignment, wrapping, borders, comments, clearing cells, inserting and deleting
+  rows and columns.
 - **Rewrite as Formal | My voice** (Writer) - one click rewrites the selection formally, or the
   way *you* write (see *My voice* below).
 - **Quick actions** - Writer: *Improve, Fix grammar, Make shorter, Simplify, Translate FR / EN,
@@ -113,6 +124,8 @@ extension/                 the .oxt contents
                                  LibreOffice's bundled Python can't pip install the SDK)
   pythonpath/claude_office.py    read selection / write reply for Writer and Calc;
                                  read Impress and Draw
+  pythonpath/claude_edits.py     Claude's direct edits: the <edits> block it ends a reply with,
+                                 applied through UNO in one undo step
   panel/                   the side panel page (index.html, style.css, app.js; diff.js compares
                            the selection with Claude's rewrite)
   pythonpath/claude_panel.py     local server for the panel + opening its own window
@@ -127,13 +140,14 @@ tests/test_cli.py          Claude Code connection against a fake `claude` (fake_
 tests/test_uno.py          installs the .oxt into a throwaway profile, starts headless
                            LibreOffice, and drives the panel's API on real Writer/Calc/Impress/Draw documents
                            (claude_embed.py needs Windows and isn't covered)
+tests/test_edits.py        reading Claude's <edits> block (no LibreOffice needed)
 tests/test_diff.js         the panel's word comparison (node tests/test_diff.js)
 tests/test_build.py        the committed .oxt matches extension/
 ```
 
 ```
 python3 build.py
-cd tests && python3 -m unittest test_build test_api test_cli test_uno -v    # needs soffice + python3-uno
+cd tests && python3 -m unittest test_build test_api test_cli test_edits test_uno -v    # needs soffice + python3-uno
 node test_diff.js                                                  # still in tests/
 ```
 

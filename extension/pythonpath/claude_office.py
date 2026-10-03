@@ -35,9 +35,9 @@ SYSTEM_WRITER = SYSTEM_BASE.format(app="Writer", doc="document") + (
 
 SYSTEM_CALC = SYSTEM_BASE.format(app="Calc", doc="spreadsheet") + (
     " Spreadsheet content is shown as a tab-separated grid with column letters across the top "
-    "and row numbers down the left. When the user wants values, a table or formulas put into "
-    "the sheet, reply with ONLY tab-separated rows (no row numbers, no column letters, no "
-    "Markdown, no code fences); the user writes them into the sheet at or just below the selection. Formulas start "
+    "and row numbers down the left. When the request asks for tab-separated rows, reply with "
+    "ONLY tab-separated rows (no row numbers, no column letters, no Markdown, no code fences); "
+    "the user writes them into the sheet at or just below the selection. Formulas start "
     "with \"=\", use English function names, and use \";\" as the argument separator, e.g. "
     "=IF(B2>0;\"yes\";\"no\"). Otherwise answer in concise plain text, and cite the cells you "
     "rely on in square brackets, e.g. [B3], [B2:B9] or [Data!C4], so the user can click through "
@@ -75,7 +75,9 @@ def doc_kind(doc):
 
 
 def system_prompt(kind, extra=""):
-    base = {WRITER: SYSTEM_WRITER, CALC: SYSTEM_CALC, IMPRESS: SYSTEM_IMPRESS, DRAW: SYSTEM_DRAW}[kind]
+    import claude_edits
+    base = {WRITER: SYSTEM_WRITER + claude_edits.WRITER_HELP, CALC: SYSTEM_CALC + claude_edits.CALC_HELP,
+            IMPRESS: SYSTEM_IMPRESS, DRAW: SYSTEM_DRAW}[kind]
     extra = (extra or "").strip()
     return base + ("\n\nAdditional instructions from the user:\n" + extra if extra else "")
 
