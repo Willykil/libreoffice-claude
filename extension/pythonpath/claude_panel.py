@@ -71,7 +71,7 @@ class PanelServer:
     # ------------------------------------------------------------ documents
 
     def document(self):
-        """The active Writer/Calc document, or the last one used while the panel has focus."""
+        """The active Writer/Calc/Impress/Draw document, or the last one used while the panel has focus."""
         try:
             desktop = self.ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", self.ctx)
             doc = desktop.getCurrentComponent()
@@ -123,6 +123,7 @@ class PanelServer:
             except claude_office.OfficeError as e:
                 out["doc"] = {"kind": claude_office.doc_kind(doc), "title": self._title(doc),
                               "label": str(e), "has_selection": False}
+            out["doc"]["writable"] = out["doc"]["kind"] in claude_office.WRITABLE
             out["quick"] = [{"label": l, "prompt": p, "needs_selection": n}
                             for l, p, n in claude_actions.QUICK_ACTIONS[out["doc"]["kind"]]]
         return out
@@ -146,7 +147,7 @@ class PanelServer:
             return {"error": "Type what you'd like Claude to do."}
         doc = doc or self.document()
         if doc is None:
-            return {"error": "Open a Writer document or Calc spreadsheet first."}
+            return {"error": "Open a document, spreadsheet or presentation first."}
         try:
             context = claude_office.get_context(doc)
         except claude_office.OfficeError as e:
@@ -302,7 +303,7 @@ class PanelServer:
         mode = claude_office.REPLACE if body.get("mode") == "replace" else claude_office.INSERT_AFTER
         doc = doc or self.document()
         if doc is None:
-            return {"error": "Open a Writer document or Calc spreadsheet first."}
+            return {"error": "Open a document, spreadsheet or presentation first."}
         settings = claude_api.load_settings(self.settings_path)
         try:
             if claude_office.doc_kind(doc) == claude_office.CALC and not body.get("confirm"):
@@ -319,7 +320,7 @@ class PanelServer:
     def goto(self, body):
         doc = self.document()
         if doc is None:
-            return {"error": "Open a Writer document or Calc spreadsheet first."}
+            return {"error": "Open a document, spreadsheet or presentation first."}
         try:
             claude_office.goto(doc, body.get("ref"))
         except claude_office.OfficeError as e:
@@ -330,7 +331,7 @@ class PanelServer:
 
     # Settings the panel edits. Model, effort and tracked changes also change from the composer.
     _TEXT_KEYS = ("backend", "model", "effort", "claude_path")
-    _FREE_TEXT_KEYS = ("instructions_writer", "instructions_calc")
+    _FREE_TEXT_KEYS = ("instructions_writer", "instructions_calc", "instructions_impress", "instructions_draw")
 
     def get_settings(self):
         s = claude_api.load_settings(self.settings_path)

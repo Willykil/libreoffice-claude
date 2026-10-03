@@ -37,6 +37,23 @@ QUICK_ACTIONS = {
                      "formats, obvious typos. Reply with only the cleaned tab-separated grid, same shape "
                      "and order.", True),
     ],
+    # Impress and Draw: read only for now, so actions that answer rather than rewrite.
+    claude_office.IMPRESS: [
+        ("Summarize", "Summarize this presentation: its main message and the key point of each section.", False),
+        ("Explain", PROMPTS["explain"], False),
+        ("Proofread", "Check the slide text and speaker notes for spelling, grammar and wording problems. "
+                      "List each one with its slide marker and a suggested fix.", False),
+        ("Review deck", "Review this presentation as a coach: structure, flow, slides that are too dense or "
+                        "unclear, and missing pieces. Be specific and cite the slides.", False),
+        ("Speaker notes", "Write speaker notes for the current slide (or the selection): what to say, in "
+                          "a few short spoken sentences.", False),
+    ],
+    claude_office.DRAW: [
+        ("Summarize", PROMPTS["summarize"], False),
+        ("Explain", PROMPTS["explain"], False),
+        ("Proofread", "Check the text in this drawing for spelling, grammar and wording problems. List each "
+                      "one with its page marker and a suggested fix.", False),
+    ],
 }
 
 

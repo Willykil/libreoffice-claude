@@ -1,7 +1,7 @@
 # Claude for LibreOffice
 
-A LibreOffice extension that puts Claude in LibreOffice's sidebar, next to Writer and Calc, the
-way the Claude add-ins work in Word and Excel.
+A LibreOffice extension that puts Claude in LibreOffice's sidebar, next to Writer, Calc, Impress
+and Draw, the way the Claude add-ins work in Word and Excel.
 
 Click the **sparkle tab** on the right edge of the window (the sidebar's tab bar; *View > Sidebar*
 if it's hidden), the sparkle toolbar button, or **Claude > Ask Claude...**. LibreOffice's window
@@ -35,11 +35,16 @@ or the whole document / the sheet's filled area when nothing is selected) and of
 - **Claude reads the whole document or workbook** - every sheet in Calc (while under 50,000
   cells), plus comments and tracked changes in Writer, so "summarize the redlines" or "what do
   the comments ask for" work. Your selection is what it works on.
+- **Impress and Draw** (read only for now) - Claude reads every slide or page: titles, bullets,
+  text boxes, tables, pictures by their alternative text, speaker notes and comments. Quick
+  actions: Impress *Summarize, Explain, Proofread, Review deck, Speaker notes*; Draw *Summarize,
+  Explain, Proofread*. Answers cite slides (Slide 3) you can click; replies are copied, not
+  written into the slides yet (LibreOffice can't undo edits made that way).
 - **Calc** replies are previewed as a grid (`=` values become live formulas); *Write below* /
   *Write at selection*, with a warning before overwriting cells that have content.
 - **Past conversations** (clock icon), kept on this computer only; clear them in Settings.
-- **Settings** (gear): connection, *Your writing voice*, and standing instructions for Writer and
-  Calc.
+- **Settings** (gear): connection, *Your writing voice*, and standing instructions for Writer,
+  Calc, Impress and Draw.
 
 The **Claude** menu's *Improve Writing*, *Summarize* and *Explain Selection* open the sidebar and
 run straight away.
@@ -73,10 +78,11 @@ That's it - no API key needed. Requires LibreOffice 7.0 or newer. On Linux distr
   [console.anthropic.com](https://console.anthropic.com/settings/keys) billing. That key is
   stored in plain text in `claude-for-libreoffice.json` in your LibreOffice user profile
   (`%APPDATA%\LibreOffice\4\user` on Windows), or set `ANTHROPIC_API_KEY`.
-- **What is sent:** the document (or the workbook's sheets), its comments and tracked changes,
+- **What is sent:** the document (or the workbook's sheets, or the slides with their notes), its comments and
+  tracked changes,
   your selection, and your instruction. Nothing else. Claude gets no file, web or command access
   from here. Calc selections over 50,000 cells are refused rather than silently cut.
-- **Always tell Claude in Writer / in Calc** (Settings) adds standing instructions to every
+- **Always tell Claude in Writer / Calc / Impress / Draw** (Settings) adds standing instructions to every
   request in that app, e.g. "Write in Canadian French."
 - **My voice** learns from your own writing, not from your Claude account: Claude doesn't pick
   up your style from past conversations, and the Claude app's memory and styles don't reach
@@ -102,7 +108,8 @@ extension/                 the .oxt contents
   pythonpath/claude_cli.py       default connection: runs the user's `claude -p`
   pythonpath/claude_api.py       settings + API-key connection (raw HTTP, since
                                  LibreOffice's bundled Python can't pip install the SDK)
-  pythonpath/claude_office.py    read selection / write reply for Writer and Calc
+  pythonpath/claude_office.py    read selection / write reply for Writer and Calc;
+                                 read Impress and Draw
   panel/                   the side panel page (index.html, style.css, app.js; diff.js compares
                            the selection with Claude's rewrite)
   pythonpath/claude_panel.py     local server for the panel + opening its own window
@@ -115,7 +122,7 @@ build.py                   zips extension/ into claude-for-libreoffice.oxt
 tests/test_api.py          API client against a local mock server
 tests/test_cli.py          Claude Code connection against a fake `claude` (fake_claude.py)
 tests/test_uno.py          installs the .oxt into a throwaway profile, starts headless
-                           LibreOffice, and drives the panel's API on real Writer/Calc documents
+                           LibreOffice, and drives the panel's API on real Writer/Calc/Impress/Draw documents
                            (claude_embed.py needs Windows and isn't covered)
 tests/test_diff.js         the panel's word comparison (node tests/test_diff.js)
 tests/test_build.py        the committed .oxt matches extension/
