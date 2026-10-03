@@ -6,8 +6,10 @@ extension never sees or stores the user's Claude credentials; it only runs
 the unmodified `claude` program and reads its answer.
 """
 
+import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -22,7 +24,8 @@ INSTALL_HELP = (
     "1. Open PowerShell and run:  irm https://claude.ai/install.ps1 | iex\n"
     "2. Then run:  claude   and sign in with your Claude account.\n"
     "3. Restart LibreOffice.\n\n"
-    "If it's installed somewhere unusual, set its path in Claude > Settings.")
+    "Already installed? In PowerShell,  where.exe claude  shows where it is; put that path in "
+    "Settings > Advanced > Claude Code location.")
 
 LOGIN_HELP = ("Claude Code isn't signed in. Open a terminal, run  claude  and sign in "
               "with your Claude account, then try again.")
@@ -35,16 +38,51 @@ def find_claude(settings):
     found = shutil.which("claude")
     if found:
         return found
+    # LibreOffice keeps the PATH it started with, which can predate installing Claude Code
+    # (Windows only hands the new PATH to programs started afterwards), so read the current one.
+    path = _registry_path()
+    found = shutil.which("claude", path=path) if path else None
+    return found or next((c for c in candidates() if os.path.isfile(c)), None)
+
+
+def candidates():
     home = os.path.expanduser("~")
-    candidates = [
-        os.path.join(home, ".local", "bin", "claude.exe"),
+    appdata, local = os.environ.get("APPDATA", ""), os.environ.get("LOCALAPPDATA", "")
+    out = [
+        os.path.join(home, ".local", "bin", "claude.exe"),       # the native installer
         os.path.join(home, ".local", "bin", "claude"),
+        os.path.join(home, ".claude", "local", "claude.exe"),
         os.path.join(home, ".claude", "local", "claude"),
-        os.path.join(os.environ.get("APPDATA", ""), "npm", "claude.cmd"),
+        os.path.join(appdata, "npm", "claude.cmd"),               # npm install -g
+        os.path.join(local, "Microsoft", "WinGet", "Links", "claude.exe"),
+        os.path.join(local, "Programs", "claude", "claude.exe"),
         "/opt/homebrew/bin/claude",
         "/usr/local/bin/claude",
     ]
-    return next((c for c in candidates if os.path.isfile(c)), None)
+    # The copy of Claude Code that the Claude desktop app keeps, newest first.
+    bundled = glob.glob(os.path.join(appdata, "Claude", "claude-code", "*", "claude.exe")) if appdata else []
+    bundled += glob.glob(os.path.join(home, "Library", "Application Support", "Claude", "claude-code", "*", "claude"))
+    return out + sorted(bundled, key=_version_key, reverse=True)
+
+
+def _version_key(path):
+    version = os.path.basename(os.path.dirname(path))
+    return [int(n) for n in re.findall(r"\d+", version)]
+
+
+def _registry_path():
+    if sys.platform != "win32":
+        return None
+    import winreg
+    parts = []
+    for root, key in ((winreg.HKEY_CURRENT_USER, "Environment"),
+                      (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")):
+        try:
+            with winreg.OpenKey(root, key) as k:
+                parts.append(os.path.expandvars(winreg.QueryValueEx(k, "Path")[0]))
+        except OSError:
+            pass
+    return os.pathsep.join(parts) or None
 
 
 def build_command(exe, settings, system_file):

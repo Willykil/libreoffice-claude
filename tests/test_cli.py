@@ -116,6 +116,22 @@ class CliTest(unittest.TestCase):
         finally:
             os.environ["PATH"] = old
 
+    def test_desktop_app_copy_newest_first(self):
+        appdata = os.path.join(self.tmp.name, "appdata")
+        for v in ("2.9.0", "2.10.1"):
+            os.makedirs(os.path.join(appdata, "Claude", "claude-code", v))
+            open(os.path.join(appdata, "Claude", "claude-code", v, "claude.exe"), "w").close()
+        old = os.environ.get("APPDATA")
+        os.environ["APPDATA"] = appdata
+        try:
+            found = [c for c in claude_cli.candidates() if "claude-code" in c]
+        finally:
+            if old is None:
+                del os.environ["APPDATA"]
+            else:
+                os.environ["APPDATA"] = old
+        self.assertEqual([os.path.basename(os.path.dirname(c)) for c in found], ["2.10.1", "2.9.0"])
+
 
 if __name__ == "__main__":
     unittest.main()
