@@ -4,7 +4,12 @@ const params = new URLSearchParams(location.search);
 const TOKEN = params.get("t") || "";
 const firstRun = params.get("run");
 const WINDOW_ID = params.get("w");      // set when shown inside LibreOffice's sidebar (claude_embed.py)
-if (WINDOW_ID) document.title = "Claude-panel-" + WINDOW_ID;    // how LibreOffice finds this window
+if (WINDOW_ID) {
+  // How LibreOffice finds this window, plus the height of Edge's title bar in screen pixels,
+  // which it cuts off when placing the window in the sidebar.
+  const bar = Math.max(0, Math.round((window.outerHeight - window.innerHeight) * window.devicePixelRatio));
+  document.title = "Claude-panel-" + WINDOW_ID + "-" + bar;
+}
 history.replaceState(null, "", "/?t=" + encodeURIComponent(TOKEN) +       // a reload must not re-run it
   (WINDOW_ID ? "&w=" + encodeURIComponent(WINDOW_ID) : ""));
 
