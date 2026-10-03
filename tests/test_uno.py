@@ -903,6 +903,10 @@ class UnoTest(unittest.TestCase):
         doc, outline = self.impress_deck()
         ctl = doc.getCurrentController()
         ctl.select(outline)
+        # A hidden Impress view can take a moment to report the new selection; this flaked in CI.
+        deadline = time.time() + 5
+        while not claude_office.selection_summary(doc)[1] and time.time() < deadline:
+            time.sleep(0.05)
         self.assertEqual(claude_office.selection_summary(doc), ("Selection: 1 shape on slide 2", True))
         self.api("/api/ask", {"instruction": "shorter"})
         self.assertIn("<selection>\n- Revenue up\n  - New region\n</selection>", self.last_prompt())
