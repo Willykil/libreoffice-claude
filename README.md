@@ -104,12 +104,14 @@ tests/test_cli.py          Claude Code connection against a fake `claude` (fake_
 tests/test_uno.py          installs the .oxt into a throwaway profile, starts headless
                            LibreOffice, and drives the panel's API on real Writer/Calc documents
 tests/test_diff.js         the panel's word comparison (node tests/test_diff.js)
+tests/test_build.py        the committed .oxt matches extension/
 ```
 
 ```
 python3 build.py
-cd tests && python3 -m unittest test_api test_cli test_uno -v    # needs soffice + python3-uno
+cd tests && python3 -m unittest test_build test_api test_cli test_uno -v    # needs soffice + python3-uno
 node test_diff.js                                                  # still in tests/
 ```
 
-Rebuild the `.oxt` after changing anything under `extension/`.
+Rebuild the `.oxt` after changing anything under `extension/`; CI (`.github/workflows/libreoffice-claude.yml`)
+runs all of the above and fails if the `.oxt` is stale.
