@@ -30,6 +30,7 @@ from com.sun.star.ucb import XCommandEnvironment  # noqa: E402
 import build  # noqa: E402
 import claude_actions  # noqa: E402
 import claude_api  # noqa: E402
+import claude_office  # noqa: E402
 import claude_panel  # noqa: E402
 import claude_voice  # noqa: E402
 from mock_server import MockClaude  # noqa: E402
@@ -61,6 +62,24 @@ def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def wait_for(fn, timeout=10):
+    """Poll fn until it returns something truthy (the sidebar opens a moment after the menu click)."""
+    deadline = time.time() + timeout
+    while True:
+        value = fn()
+        if value or time.time() > deadline:
+            return value
+        time.sleep(0.1)
+
+
+def _read(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return None
 
 
 def call(port, token, path, body=None, host=None):
@@ -183,14 +202,74 @@ class UnoTest(unittest.TestCase):
         path = claude_actions.settings_path(self.ctx)
         self.assertTrue(path.startswith(os.path.join(self.tmp, "profile")), path)
 
+    def test_sidebar_registered(self):
+        cp = self.ctx.ServiceManager.createInstanceWithContext(
+            "com.sun.star.configuration.ConfigurationProvider", self.ctx)
+
+        def node(path):
+            return cp.createInstanceWithArguments("com.sun.star.configuration.ConfigurationAccess",
+                                                  (_prop("nodepath", path),))
+        deck = node("/org.openoffice.Office.UI.Sidebar/Content/DeckList/ClaudeDeck")
+        self.assertEqual(deck.getPropertyValue("Id"), "ClaudeDeck")
+        panel = node("/org.openoffice.Office.UI.Sidebar/Content/PanelList/ClaudePanel")
+        self.assertEqual(panel.getPropertyValue("DeckId"), "ClaudeDeck")
+        self.assertEqual(panel.getPropertyValue("ImplementationURL"),
+                         "private:resource/toolpanel/ClaudePanelFactory/ClaudePanel")
+        factory = node("/org.openoffice.Office.UI.Factories/Registered/UIElementFactories/"
+                       "org.willykil.claude.PanelFactory")
+        self.assertEqual(factory.getPropertyValue("Name"), "ClaudePanelFactory")
+        self.assertIsNotNone(self.ctx.ServiceManager.createInstanceWithContext(
+            "org.willykil.claude.PanelFactory", self.ctx), "sidebar panel factory failed to load")
+
+    def test_sidebar_panel_builds_in_a_window(self):
+        doc = self.open("swriter")
+        frame = doc.getCurrentController().getFrame()
+        factory = self.ctx.ServiceManager.createInstanceWithContext("org.willykil.claude.PanelFactory", self.ctx)
+        element = factory.createUIElement("private:resource/toolpanel/ClaudePanelFactory/ClaudePanel",
+                                          (_prop("Frame", frame), _prop("ParentWindow", frame.getContainerWindow())))
+        self.assertEqual(element.Type, 7)
+        panel = element.getRealInterface()
+        self.assertEqual(panel.getMinimalWidth(), 280)
+        self.assertEqual(panel.getHeightForWidth(300).Minimum, 420)
+        self.assertIsNotNone(panel.Window)
+
+    def test_selection_summary(self):
+        doc = self.writer_with_selection()
+        self.assertEqual(claude_office.selection_summary(doc), ("Selection: 4 words", True))
+        doc.getCurrentController().select(doc.getText().getStart())
+        self.assertEqual(claude_office.selection_summary(doc),
+                         ("No selection - Claude reads the whole document", False))
+        doc, sheet = self.calc_with_data()
+        doc.getCurrentController().select(sheet.getCellRangeByName("A1:B3"))
+        self.assertEqual(claude_office.selection_summary(doc), ("Selection: A1:B3", True))
+        doc.getCurrentController().select(sheet.getCellRangeByName("D2"))
+        self.assertEqual(claude_office.selection_summary(doc), ("Cell D2 - Claude reads the whole workbook", False))
+
+    def test_ask_and_apply_on_a_given_document(self):
+        # The sidebar works on its own window's document, not whichever is "current".
+        doc = self.writer_with_selection()
+        self.panel.document = lambda: None
+        self.mock.text("Fixed.")
+        res = self.panel.ask({"action": "improve"}, doc=doc)
+        self.assertEqual(res["text"], "Fixed.")
+        self.assertEqual(self.panel.apply({"text": "Fixed.", "mode": "replace"}, doc=doc),
+                         {"ok": True, "tracked": False})
+        self.assertEqual(self.paragraphs(doc), ["First paragraph stays.", "Fixed."])
+
+    def test_native_sidebar_setting(self):
+        self.assertFalse(self.api("/api/settings")["native_sidebar"])
+        self.assertTrue(self.api("/api/settings", {"native_sidebar": True})["native_sidebar"])
+
     def test_menu_opens_panel_server_inside_office(self):
-        # The real path: the menu's Job runs inside soffice, starts the server there, and
-        # (with the browser disabled for the test) reports the panel URL.
+        # The real path: the menu's Job runs inside soffice. With no sidebar (headless), it falls
+        # back to the panel's own window: it starts the server there and (with the browser
+        # disabled for the test) reports the panel URL.
         self.open("swriter")
+        if os.path.exists(self.url_file):
+            os.remove(self.url_file)
         job = self.ctx.ServiceManager.createInstanceWithContext("org.willykil.claude.Job", self.ctx)
         job.trigger("ask")
-        with open(self.url_file) as f:
-            url = f.read()
+        url = wait_for(lambda: _read(self.url_file))
         port = int(url.split(":")[2].split("/")[0])
         token = url.split("t=")[1].split("&")[0]
         status, _, state = call(port, token, "/api/state")
@@ -198,7 +277,7 @@ class UnoTest(unittest.TestCase):
         self.assertEqual(state["connection"], "subscription")    # the office profile's default settings
         # Panel now counts as open: another menu action is queued for it, not a new window.
         job.trigger("summarize")
-        self.assertEqual(call(port, token, "/api/state")[2]["pending"], "summarize")
+        self.assertEqual(wait_for(lambda: call(port, token, "/api/state")[2]["pending"]), "summarize")
         self.assertIsNone(call(port, token, "/api/state")[2]["pending"])
 
     # ---- the server's guard rails

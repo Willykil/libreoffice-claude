@@ -3,7 +3,15 @@
 const params = new URLSearchParams(location.search);
 const TOKEN = params.get("t") || "";
 const firstRun = params.get("run");
-history.replaceState(null, "", "/?t=" + encodeURIComponent(TOKEN));   // a reload must not re-run it
+const WINDOW_ID = params.get("w");      // set when shown inside LibreOffice's sidebar (claude_embed.py)
+if (WINDOW_ID) {
+  // How LibreOffice finds this window, plus the height of Edge's title bar in screen pixels,
+  // which it cuts off when placing the window in the sidebar.
+  const bar = Math.max(0, Math.round((window.outerHeight - window.innerHeight) * window.devicePixelRatio));
+  document.title = "Claude-panel-" + WINDOW_ID + "-" + bar;
+}
+history.replaceState(null, "", "/?t=" + encodeURIComponent(TOKEN) +       // a reload must not re-run it
+  (WINDOW_ID ? "&w=" + encodeURIComponent(WINDOW_ID) : ""));
 
 const $ = (id) => document.getElementById(id);
 const thread = $("thread"), promptBox = $("prompt"), sendBtn = $("send");
@@ -146,6 +154,7 @@ async function poll() {
 
 function handleRun(action) {
   if (action === "settings") openSettings();
+  else if (action === "voice") openVoice();
   else if (ACTION_LABELS[action]) ask({ action }, ACTION_LABELS[action]);
   else window.focus();
 }
@@ -639,6 +648,8 @@ async function openSettings() {
   form.elements.instructions_calc.value = s.instructions_calc || "";
   form.elements.claude_path.value = s.claude_path || "";
   form.elements.max_tokens.value = s.max_tokens;
+  form.elements.native_sidebar.checked = !!s.native_sidebar;
+  $("nativeSidebarRow").hidden = !s.windows;
   form.elements.api_key.value = "";
   form.elements.api_key.placeholder = s.has_api_key ? "Saved — type to replace" : "sk-ant-…";
   $("clearKey").hidden = !s.has_api_key;
@@ -653,6 +664,7 @@ form.addEventListener("submit", async (e) => {
   const body = {
     backend: f.backend.value, instructions_writer: f.instructions_writer.value,
     instructions_calc: f.instructions_calc.value, claude_path: f.claude_path.value, max_tokens: f.max_tokens.value,
+    native_sidebar: f.native_sidebar.checked,
   };
   if (f.api_key.value.trim()) body.api_key = f.api_key.value.trim();
   try { await api("/api/settings", body); } catch (err) { return toast(err.message, true); }

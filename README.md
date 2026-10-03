@@ -1,12 +1,22 @@
 # Claude for LibreOffice
 
-A LibreOffice extension that puts Claude in a side panel next to Writer and Calc, the way the
-Claude add-ins work in Word and Excel.
+A LibreOffice extension that puts Claude in LibreOffice's sidebar, next to Writer and Calc, the
+way the Claude add-ins work in Word and Excel.
 
-Click the sparkle button (toolbar, **Extension** tab in the Tabbed interface, or
-**Claude > Ask Claude...**). The panel docks on the right of the screen, LibreOffice moves over to
-make room, and it follows your light/dark Windows theme. It shows what Claude will read (your
-selection, or the whole document / the sheet's filled area when nothing is selected) and offers:
+Click the **sparkle tab** on the right edge of the window (the sidebar's tab bar; *View > Sidebar*
+if it's hidden), the sparkle toolbar button, or **Claude > Ask Claude...**. LibreOffice's window
+is never moved or resized.
+
+- **On Windows** the full panel (below) opens inside the sidebar. It's a chromeless Microsoft Edge
+  window placed into the sidebar; this is new, so if it can't be placed, the sidebar shows the
+  simple version instead, and *Settings > Advanced > Simple sidebar* keeps it that way.
+- **The simple version** (Linux and macOS, or as the fallback) is made of LibreOffice's own
+  controls: Rewrite as Formal / My voice, the quick actions, a message box, model and effort,
+  Tracked, and Replace / Insert below / Copy. *Open full panel* shows the full panel in its own
+  window.
+
+The full panel follows your light/dark theme. It shows what Claude will read (your selection,
+or the whole document / the sheet's filled area when nothing is selected) and offers:
 
 - **Rewrite as Formal | My voice** (Writer) - one click rewrites the selection formally, or the
   way *you* write (see *My voice* below).
@@ -31,7 +41,7 @@ selection, or the whole document / the sheet's filled area when nothing is selec
 - **Settings** (gear): connection, *Your writing voice*, and standing instructions for Writer and
   Calc.
 
-The **Claude** menu's *Improve Writing*, *Summarize* and *Explain Selection* open the panel and
+The **Claude** menu's *Improve Writing*, *Summarize* and *Explain Selection* open the sidebar and
 run straight away.
 
 ## Install
@@ -76,10 +86,10 @@ That's it - no API key needed. Requires LibreOffice 7.0 or newer. On Linux distr
   in `claude-voice.json` in your LibreOffice profile and are sent to Claude only with My voice
   requests and when you press *Learn my style*. *Use my voice by default* makes requests you type
   in Writer come back in your voice too.
-- **The panel is a small local web page** shown in a chromeless Microsoft Edge window (Chrome
+- **The full panel is a small local web page** shown in a chromeless Microsoft Edge window (Chrome
   also works; otherwise your default browser). It is served by LibreOffice itself on
   `127.0.0.1` only, and every request needs a random per-session key, so other websites and
-  programs can't drive it. Closing the panel window is fine; the sparkle button reopens it.
+  programs can't drive it.
 
 ## Develop
 
@@ -87,6 +97,7 @@ That's it - no API key needed. Requires LibreOffice 7.0 or newer. On Linux distr
 extension/                 the .oxt contents
   claude_extension.py      UNO component; menu URLs call service:org.willykil.claude.Job?<action>
   Addons.xcu               menu + toolbar
+  Sidebar.xcu, Factories.xcu   the Claude sidebar tab and the factory that builds its panel
   icons/                   sparkle icon (sparkle.svg is the source)
   pythonpath/claude_cli.py       default connection: runs the user's `claude -p`
   pythonpath/claude_api.py       settings + API-key connection (raw HTTP, since
@@ -94,7 +105,9 @@ extension/                 the .oxt contents
   pythonpath/claude_office.py    read selection / write reply for Writer and Calc
   panel/                   the side panel page (index.html, style.css, app.js; diff.js compares
                            the selection with Claude's rewrite)
-  pythonpath/claude_panel.py     local server for the panel + opening/docking its window
+  pythonpath/claude_panel.py     local server for the panel + opening its own window
+  pythonpath/claude_sidebar.py   the sidebar panel; its simple version from LibreOffice controls
+  pythonpath/claude_embed.py     Windows: places the full panel (an Edge window) inside the sidebar
   pythonpath/claude_actions.py   prompts and quick actions
   pythonpath/claude_voice.py     My voice: samples, learning, the voice in rewrites
   pythonpath/claude_dialogs.py   the one native message box (if the panel can't open)
@@ -103,6 +116,7 @@ tests/test_api.py          API client against a local mock server
 tests/test_cli.py          Claude Code connection against a fake `claude` (fake_claude.py)
 tests/test_uno.py          installs the .oxt into a throwaway profile, starts headless
                            LibreOffice, and drives the panel's API on real Writer/Calc documents
+                           (claude_embed.py needs Windows and isn't covered)
 tests/test_diff.js         the panel's word comparison (node tests/test_diff.js)
 tests/test_build.py        the committed .oxt matches extension/
 ```

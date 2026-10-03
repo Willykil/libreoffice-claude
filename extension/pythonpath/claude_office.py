@@ -138,6 +138,26 @@ def _selection_neighbours(doc, paras):
     return None, "", ""
 
 
+def selection_summary(doc):
+    """(label, has_selection): a cheap one-liner for the sidebar, without reading the whole document."""
+    kind = doc_kind(doc)
+    if kind == WRITER:
+        words = len(selected_text(doc).split())
+        if words:
+            return "Selection: %d word%s" % (words, "" if words == 1 else "s"), True
+        return "No selection - Claude reads the whole document", False
+    if kind == CALC:
+        try:
+            a = _calc_selection_address(doc)
+        except OfficeError as e:
+            return str(e), False
+        ref = _ref(a.StartColumn, a.StartRow, a.EndColumn, a.EndRow)
+        if a.StartColumn == a.EndColumn and a.StartRow == a.EndRow:
+            return "Cell %s - Claude reads the whole workbook" % ref, False
+        return "Selection: %s" % ref, True
+    return "Open a Writer document or Calc spreadsheet.", False
+
+
 def document_text(doc):
     """Plain text of a Writer document's main text, for learning a writing voice from it."""
     return "\n".join(t.split(") ", 1)[1] if t.startswith("(Heading") or t.startswith("(Title)") else t

@@ -127,7 +127,7 @@ class PanelServer:
                             for l, p, n in claude_actions.QUICK_ACTIONS[out["doc"]["kind"]]]
         return out
 
-    def ask(self, body):
+    def ask(self, body, doc=None):
         instruction = (body.get("instruction") or "").strip()
         if body.get("action") in claude_actions.PROMPTS:
             instruction = claude_actions.PROMPTS[body["action"]]
@@ -144,7 +144,7 @@ class PanelServer:
                 instruction = claude_voice.VOICE_REWRITE
         if not instruction:
             return {"error": "Type what you'd like Claude to do."}
-        doc = self.document()
+        doc = doc or self.document()
         if doc is None:
             return {"error": "Open a Writer document or Calc spreadsheet first."}
         try:
@@ -297,10 +297,10 @@ class PanelServer:
             req.set()
         return {"ok": True}
 
-    def apply(self, body):
+    def apply(self, body, doc=None):
         text = body.get("text") or ""
         mode = claude_office.REPLACE if body.get("mode") == "replace" else claude_office.INSERT_AFTER
-        doc = self.document()
+        doc = doc or self.document()
         if doc is None:
             return {"error": "Open a Writer document or Calc spreadsheet first."}
         settings = claude_api.load_settings(self.settings_path)
@@ -336,6 +336,7 @@ class PanelServer:
         s = claude_api.load_settings(self.settings_path)
         out = {k: s[k] for k in self._TEXT_KEYS + self._FREE_TEXT_KEYS}
         out.update({"max_tokens": s["max_tokens"], "track_changes": bool(s["track_changes"]),
+                    "native_sidebar": bool(s["native_sidebar"]), "windows": sys.platform == "win32",
                     "has_api_key": bool(s["api_key"]), "models": claude_api.MODELS,
                     "efforts": claude_api.EFFORTS})
         return out
@@ -348,8 +349,9 @@ class PanelServer:
         for key in self._FREE_TEXT_KEYS:
             if key in body:
                 s[key] = str(body[key])
-        if "track_changes" in body:
-            s["track_changes"] = bool(body["track_changes"])
+        for key in ("track_changes", "native_sidebar"):
+            if key in body:
+                s[key] = bool(body[key])
         if s["backend"] not in (claude_api.CLAUDE_CODE, claude_api.API):
             s["backend"] = claude_api.CLAUDE_CODE
         if s["effort"] not in claude_api.EFFORTS:
@@ -557,50 +559,20 @@ def find_browser():
 
 
 def launch_window(ctx, url):
+    """The panel in its own window. Never moves or resizes LibreOffice (an earlier version did, and
+    with several screens or display scaling it threw LibreOffice onto the wrong screen)."""
     if os.environ.get("CLAUDE_LO_BROWSER") == "none":
-        return
+        return None
     browser = find_browser()
     if not browser:
         webbrowser.open(url)
-        return
-    x, y, height = dock(ctx)
+        return None
+    return subprocess.Popen(browser_args(ctx, browser, url, PANEL_WIDTH, PANEL_HEIGHT),
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            close_fds=True)
+
+
+def browser_args(ctx, browser, url, width, height, extra=()):
     profile = os.path.join(os.path.dirname(claude_actions.settings_path(ctx)), "claude-panel-browser")
-    args = [browser, "--app=" + url, "--window-size=%d,%d" % (PANEL_WIDTH, height),
-            "--window-position=%d,%d" % (x, y), "--user-data-dir=" + profile,
-            "--no-first-run", "--no-default-browser-check"]
-    subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     close_fds=True)
-
-
-def _dpi_scale():
-    """Windows display scaling: LibreOffice works in pixels, the browser in scaled units."""
-    if sys.platform != "win32":
-        return 1.0
-    try:
-        import ctypes
-        return max(1.0, ctypes.windll.user32.GetDpiForSystem() / 96.0)
-    except Exception:
-        return 1.0
-
-
-def dock(ctx):
-    """Make room for the panel: shrink the LibreOffice window to the left of it, like a docked
-    task pane. Returns the panel's (x, y, height) in browser units."""
-    try:
-        smgr = ctx.ServiceManager
-        area = smgr.createInstanceWithContext("com.sun.star.awt.Toolkit", ctx).getWorkArea()
-    except Exception:
-        return 0, 0, PANEL_HEIGHT
-    scale = _dpi_scale()
-    panel_px = int(PANEL_WIDTH * scale)
-    try:
-        desktop = smgr.createInstanceWithContext("com.sun.star.frame.Desktop", ctx)
-        window = desktop.getCurrentFrame().getContainerWindow()
-        try:
-            window.IsMaximized = False
-        except Exception:
-            pass
-        window.setPosSize(area.X, area.Y, area.Width - panel_px, area.Height, 15)   # PosSize.POSSIZE
-    except Exception:
-        pass
-    return (int((area.X + area.Width - panel_px) / scale), int(area.Y / scale), int(area.Height / scale))
+    return [browser, "--app=" + url, "--window-size=%d,%d" % (width, height), "--user-data-dir=" + profile,
+            "--no-first-run", "--no-default-browser-check"] + list(extra)
