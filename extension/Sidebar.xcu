@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- The Claude tab in LibreOffice's sidebar (the icon strip on the right), in Writer and Calc. -->
+<!-- The Claude tab in LibreOffice's sidebar (the icon strip on the right), in Writer, Calc, Impress and Draw. -->
 <oor:component-data xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema"
                     oor:name="Sidebar" oor:package="org.openoffice.Office.UI">
   <node oor:name="Content">
@@ -9,7 +9,7 @@
         <prop oor:name="Id" oor:type="xs:string"><value>ClaudeDeck</value></prop>
         <prop oor:name="IconURL" oor:type="xs:string"><value>%origin%/icons/sparkle_26.png</value></prop>
         <prop oor:name="ContextList">
-          <value oor:separator=";">WriterVariants, any, visible; Calc, any, visible;</value>
+          <value oor:separator=";">WriterVariants, any, visible; Calc, any, visible; Impress, any, visible; Draw, any, visible;</value>
         </prop>
         <prop oor:name="OrderIndex" oor:type="xs:int"><value>50</value></prop>
       </node>
@@ -21,7 +21,7 @@
         <prop oor:name="Id" oor:type="xs:string"><value>ClaudePanel</value></prop>
         <prop oor:name="DeckId" oor:type="xs:string"><value>ClaudeDeck</value></prop>
         <prop oor:name="ContextList">
-          <value oor:separator=";">WriterVariants, any, visible; Calc, any, visible;</value>
+          <value oor:separator=";">WriterVariants, any, visible; Calc, any, visible; Impress, any, visible; Draw, any, visible;</value>
         </prop>
         <prop oor:name="ImplementationURL" oor:type="xs:string">
           <value>private:resource/toolpanel/ClaudePanelFactory/ClaudePanel</value>

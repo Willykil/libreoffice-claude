@@ -1,4 +1,5 @@
 """Reading context from, and writing Claude's reply into, Writer and Calc documents.
+Impress presentations and Draw drawings are read only, for now.
 
 Everything here takes plain UNO objects, so it also works over a remote
 UNO bridge (that's how tests/test_uno.py drives it against headless soffice).
@@ -10,6 +11,10 @@ from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
 
 WRITER = "writer"
 CALC = "calc"
+IMPRESS = "impress"
+DRAW = "draw"
+# Kinds Claude can write its reply into; in the others the reply is only shown (and copied).
+WRITABLE = (WRITER, CALC)
 
 # Calc cells sent as context in one request; beyond this we ask for a smaller selection
 # instead of silently truncating.
@@ -38,6 +43,18 @@ SYSTEM_CALC = SYSTEM_BASE.format(app="Calc", doc="spreadsheet") + (
     "rely on in square brackets, e.g. [B3], [B2:B9] or [Data!C4], so the user can click through "
     "to them (never in content meant for the sheet).")
 
+SYSTEM_SLIDES = (
+    "You are Claude, an AI assistant built into LibreOffice {app}. Your reply is shown in a side "
+    "panel next to the {doc}; it is not inserted into it. Reply with only what was asked: no "
+    "preamble (\"Here is...\"), no closing remarks. Use plain text without Markdown (no **, #, or "
+    "code fences); write list items as \"- item\". The {doc} is shown {page} by {page}, each "
+    "marked like [S3] for {page} 3, with its text boxes, tables, pictures (by their alternative "
+    "text){notes} and comments. Cite the {page}s you rely on with those markers, e.g. [S3] or "
+    "[S3-S5], so the user can click through to them.")
+
+SYSTEM_IMPRESS = SYSTEM_SLIDES.format(app="Impress", doc="presentation", page="slide", notes=", speaker notes")
+SYSTEM_DRAW = SYSTEM_SLIDES.format(app="Draw", doc="drawing", page="page", notes="")
+
 
 class OfficeError(Exception):
     pass
@@ -50,11 +67,15 @@ def doc_kind(doc):
         return WRITER
     if doc.supportsService("com.sun.star.sheet.SpreadsheetDocument"):
         return CALC
+    if doc.supportsService("com.sun.star.presentation.PresentationDocument"):
+        return IMPRESS     # before Draw: both are drawing documents underneath
+    if doc.supportsService("com.sun.star.drawing.DrawingDocument"):
+        return DRAW
     return None
 
 
 def system_prompt(kind, extra=""):
-    base = SYSTEM_WRITER if kind == WRITER else SYSTEM_CALC
+    base = {WRITER: SYSTEM_WRITER, CALC: SYSTEM_CALC, IMPRESS: SYSTEM_IMPRESS, DRAW: SYSTEM_DRAW}[kind]
     extra = (extra or "").strip()
     return base + ("\n\nAdditional instructions from the user:\n" + extra if extra else "")
 
@@ -82,7 +103,9 @@ def get_context(doc):
         return _writer_context(doc)
     if kind == CALC:
         return _calc_context(doc)
-    raise OfficeError("Claude works in Writer documents and Calc spreadsheets.")
+    if kind in (IMPRESS, DRAW):
+        return _slides_context(doc, kind)
+    raise OfficeError("Claude works in Writer, Calc, Impress and Draw.")
 
 
 def _writer_ranges(doc):
@@ -155,7 +178,9 @@ def selection_summary(doc):
         if a.StartColumn == a.EndColumn and a.StartRow == a.EndRow:
             return "Cell %s - Claude reads the whole workbook" % ref, False
         return "Selection: %s" % ref, True
-    return "Open a Writer document or Calc spreadsheet.", False
+    if kind in (IMPRESS, DRAW):
+        return _slides_label(doc, kind)
+    return "Open a document, spreadsheet or presentation.", False
 
 
 def document_text(doc):
@@ -340,6 +365,159 @@ def _col_letters(index):
     return s
 
 
+# ---------------------------------------------------------------- Impress and Draw
+
+def _page_word(kind):
+    return "slide" if kind == IMPRESS else "page"
+
+
+def _current_page_number(doc):
+    """1-based number of the slide/page on screen, or None."""
+    try:
+        current = doc.getCurrentController().getCurrentPage()
+        pages = doc.getDrawPages()
+        for i in range(pages.getCount()):
+            if pages.getByIndex(i) == current:
+                return i + 1
+    except Exception:
+        pass
+    return None
+
+
+def _selected_shapes(doc):
+    sel = doc.getCurrentController().getSelection()
+    if sel is None or not hasattr(sel, "getCount") or not hasattr(sel, "getByIndex"):
+        return []
+    return [sel.getByIndex(i) for i in range(sel.getCount())]
+
+
+def _prop(obj, name, default=None):
+    try:
+        return obj.getPropertyValue(name)
+    except Exception:
+        return default
+
+
+def _cell_table_text(model):
+    """A drawing table (TableShape.Model) as tab-separated rows."""
+    rows, cols = model.getRows().getCount(), model.getColumns().getCount()
+    return "\n".join("\t".join(model.getCellByPosition(c, r).getString() for c in range(cols))
+                     for r in range(rows))
+
+
+def _bullets(shape):
+    """An outline placeholder's paragraphs as "- item" lines, indented by level."""
+    lines = []
+    enum = shape.getText().createEnumeration()
+    while enum.hasMoreElements():
+        para = enum.nextElement()
+        text = para.getString()
+        if text.strip():
+            level = _prop(para, "NumberingLevel") or 0
+            lines.append("  " * max(level, 0) + "- " + text)
+    return "\n".join(lines)
+
+
+_LABELS = {"TitleTextShape": "Title", "SubtitleShape": "Subtitle"}
+
+
+def shape_lines(shape):
+    """What one shape says, as lines of text (empty placeholders and decorations say nothing)."""
+    kind = shape.getShapeType().rsplit(".", 1)[-1]
+    if kind == "GroupShape":
+        return [line for i in range(shape.getCount()) for line in shape_lines(shape.getByIndex(i))]
+    if kind == "PageShape" or _prop(shape, "IsEmptyPresentationObject"):
+        return []
+    if kind == "TableShape":
+        return ["(table)\n" + _cell_table_text(shape.Model)]
+    alt = " ".join(x for x in (_prop(shape, "Title") or "", _prop(shape, "Description") or "") if x.strip())
+    if kind in ("GraphicObjectShape", "OLE2Shape", "MediaShape") or kind.endswith("ChartShape"):
+        what = "chart" if kind == "OLE2Shape" else "picture"
+        return ["(%s%s)" % (what, ": " + alt if alt else "")]
+    if kind == "OutlinerShape":
+        text = _bullets(shape)
+        return [text] if text else []
+    try:
+        text = shape.getString()
+    except Exception:
+        text = ""
+    if not text.strip():
+        return ["(shape: %s)" % alt] if alt else []
+    label = _LABELS.get(kind)
+    return ["%s: %s" % (label, text) if label else text]
+
+
+def _page_text(page, number, kind):
+    word = _page_word(kind)
+    head = "[S%d] %s %d" % (number, word.capitalize(), number)
+    name = page.getName() if hasattr(page, "getName") else ""
+    if name and not re.fullmatch(r"(page|slide)\s*\d+", name, re.I):
+        head += ' "%s"' % name
+    if kind == IMPRESS and _prop(page, "Visible") is False:
+        head += " (hidden)"
+    lines = [head]
+    for i in range(page.getCount()):
+        lines.extend(shape_lines(page.getByIndex(i)))
+    if kind == IMPRESS:
+        try:
+            notes = page.getNotesPage()
+            text = "\n".join(notes.getByIndex(i).getString() for i in range(notes.getCount())
+                             if notes.getByIndex(i).getShapeType().endswith("NotesShape")
+                             and not _prop(notes.getByIndex(i), "IsEmptyPresentationObject")).strip()
+            if text:
+                lines.append("Speaker notes: " + text)
+        except Exception:
+            pass
+    try:
+        comments = page.createAnnotationEnumeration()
+        while comments.hasMoreElements():
+            c = comments.nextElement()
+            lines.append("Comment by %s: %s" % (c.Author or "someone", c.TextRange.getString()))
+    except Exception:
+        pass
+    if len(lines) == 1:
+        lines.append("(nothing written on this %s)" % word)
+    return "\n".join(lines)
+
+
+def _slides_label(doc, kind):
+    """(label, has_selection) for the panel."""
+    word = _page_word(kind)
+    number = _current_page_number(doc)
+    shapes = _selected_shapes(doc)
+    where = " on %s %d" % (word, number) if number else ""
+    if shapes:
+        return "Selection: %d shape%s%s" % (len(shapes), "" if len(shapes) == 1 else "s", where), True
+    count = doc.getDrawPages().getCount()
+    whole = "presentation" if kind == IMPRESS else "drawing"
+    return ("%s%s - Claude reads the whole %s (%d %s%s)"
+            % (word.capitalize(), " %d" % number if number else "", whole, count, word, "" if count == 1 else "s"),
+            False)
+
+
+def _slides_context(doc, kind):
+    word = _page_word(kind)
+    pages = doc.getDrawPages()
+    body = "\n\n".join(_page_text(pages.getByIndex(i), i + 1, kind) for i in range(pages.getCount()))
+    if len(body) > MAX_DOC_CHARS:
+        raise OfficeError("This file is too long to send in one go.")
+    whole = "presentation" if kind == IMPRESS else "drawing"
+    parts = ["The %s, %s by %s:\n<%s>\n%s\n</%s>" % (whole, word, word, whole, body, whole)]
+    number = _current_page_number(doc)
+    if number:
+        parts.append("The user is on %s %d." % (word, number))
+    label, has_selection = _slides_label(doc, kind)
+    selected = "\n".join(line for s in _selected_shapes(doc) for line in shape_lines(s))
+    if has_selection and selected.strip():
+        parts.append("The user has selected this on %s %s:\n<selection>\n%s\n</selection>"
+                     % (word, number or "?", selected))
+    elif has_selection:
+        parts.append("The user has selected shapes without text.")
+    else:
+        parts.append("Nothing is selected.")
+    return Context(kind, "\n\n".join(parts), has_selection, label, selection=selected if has_selection else "")
+
+
 # ---------------------------------------------------------------- applying the reply
 
 REPLACE = "replace"
@@ -348,6 +526,9 @@ INSERT_AFTER = "after"
 
 def apply_result(doc, text, mode, track_changes=False):
     kind = doc_kind(doc)
+    if kind not in WRITABLE:
+        # Impress/Draw API edits don't reach the Undo stack, so Ctrl+Z couldn't take them back.
+        raise OfficeError("Claude can't write into %ss yet; copy the reply instead." % _page_word(kind))
     undo = doc.getUndoManager()
     undo.enterUndoContext("Claude")
     try:
@@ -429,6 +610,7 @@ def _calc_apply(doc, text, mode):
 
 _WRITER_REF = re.compile(r"^P(\d+)(?:\s*[-\u2013]\s*P?(\d+))?$")
 _CELL = r"\$?[A-Z]{1,3}\$?\d{1,7}"
+_SLIDE_REF = re.compile(r"^S(\d+)(?:\s*[-\u2013]\s*S?(\d+))?$")
 _CALC_REF = re.compile(r"^(?:(?P<sheet>'(?:[^']|'')+'|[^!:'\[\]]+)!)?(?P<range>%s(?::%s)?)$" % (_CELL, _CELL))
 
 
@@ -472,7 +654,17 @@ def goto(doc, ref):
         controller.setActiveSheet(sheet)
         controller.select(sheet.getCellRangeByName(m.group("range").replace("$", "")))
         return
-    raise OfficeError("Open a Writer document or Calc spreadsheet first.")
+    if kind in (IMPRESS, DRAW):
+        m = _SLIDE_REF.match(ref)
+        if not m:
+            raise OfficeError("Unknown reference: %s" % ref)
+        pages = doc.getDrawPages()
+        n = int(m.group(1))
+        if not 1 <= n <= pages.getCount():
+            raise OfficeError("%s %d isn't there any more." % (_page_word(kind).capitalize(), n))
+        controller.setCurrentPage(pages.getByIndex(n - 1))
+        return
+    raise OfficeError("Open a document, spreadsheet or presentation first.")
 
 
 _NUMBER = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")

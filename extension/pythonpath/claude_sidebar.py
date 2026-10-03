@@ -334,8 +334,9 @@ class NativePanel:
         self._add("Edit", "reply", MultiLine=True, VScroll=True, ReadOnly=True, Text="")
         first, second = ("Write at selection", "Write below") if self.kind == claude_office.CALC else \
                         ("Replace selection", "Insert below")
-        self._add("Button", "replace", lambda: self.apply("replace"), Label=first, Enabled=False)
-        self._add("Button", "insert", lambda: self.apply("after"), Label=second, Enabled=False)
+        if self.kind in claude_office.WRITABLE:     # Impress/Draw replies are copied, not written in
+            self._add("Button", "replace", lambda: self.apply("replace"), Label=first, Enabled=False)
+            self._add("Button", "insert", lambda: self.apply("after"), Label=second, Enabled=False)
         self._add("Button", "copy", self.copy, Label="Copy", Enabled=False)
         self._add("Button", "full", self.open_full, Label="Open full panel")
         self._effort_enabled()
@@ -384,14 +385,16 @@ class NativePanel:
         y += R + 8
         place("status", P, y, w, 34)
         y += 38
-        bottom = height - P - R - 6 - R
+        writes = "replace" in self.c
+        bottom = height - P - R - (6 + R if writes else 0)
         reply_h = max(80, bottom - y - 6)
         place("reply", P, y, w, reply_h)
         y += reply_h + 6
         half = (w - 4) // 2
         place("replace", P, y, half, R)
         place("insert", P + half + 4, y, w - half - 4, R)
-        y += R + 6
+        if writes:
+            y += R + 6
         place("copy", P, y, 64, R)
         place("full", P + 68, y, w - 68, R)
 
@@ -511,7 +514,8 @@ class NativePanel:
     def _set_busy(self, busy):
         self.c["ask"].getModel().Label = "Stop" if busy else "Ask"
         for name in ("replace", "insert", "copy"):
-            self.c[name].getModel().Enabled = not busy and self.reply is not None
+            if name in self.c:
+                self.c[name].getModel().Enabled = not busy and self.reply is not None
         self.refresh_context()
 
     def _done(self, body, shown, res):
@@ -531,9 +535,11 @@ class NativePanel:
                          {"role": "assistant", "text": res["text"]}]
         self.c["reply"].setText(res["text"])
         for name in ("replace", "insert", "copy"):
-            self.c[name].getModel().Enabled = True
+            if name in self.c:
+                self.c[name].getModel().Enabled = True
         voice = " · in your voice" if res.get("voice") else ""
-        self.note("%s%s - choose where it goes, or ask for changes." % (shown, voice))
+        where = "choose where it goes" if "replace" in self.c else "copy it"
+        self.note("%s%s - %s, or ask for changes." % (shown, voice, where))
 
     # -------------------------------------------------------- putting the reply in
 
