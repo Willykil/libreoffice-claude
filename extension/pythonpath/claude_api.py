@@ -140,7 +140,8 @@ def ask_api(settings, system, user_text):
     headers["x-api-key"] = key
     url = (settings.get("base_url") or DEFAULT_SETTINGS["base_url"]).rstrip("/") + "/v1/messages"
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
-    timeout = float(settings.get("timeout_seconds") or DEFAULT_SETTINGS["timeout_seconds"])
+    # The reply comes all at once, so a long one sends nothing for minutes; allow for that.
+    timeout = max(float(settings.get("timeout_seconds") or DEFAULT_SETTINGS["timeout_seconds"]), 900)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))

@@ -87,7 +87,8 @@ def _registry_path():
 
 def build_command(exe, settings, system_file):
     cmd = [exe, "-p",
-           "--output-format", "json",
+           # Streamed, so a long answer shows it's still coming instead of looking stuck.
+           "--output-format", "stream-json", "--verbose", "--include-partial-messages",
            "--system-prompt-file", system_file,
            # A plain question-and-answer: no file, shell or MCP access.
            "--tools", "",
@@ -103,12 +104,17 @@ def build_command(exe, settings, system_file):
     return cmd
 
 
+# Claude Code gets this long without printing anything before we give up on it; a long
+# answer keeps streaming, so it can run for up to MAX_SECONDS.
+MAX_SECONDS = 30 * 60
+
+
 def ask(settings, system, user_text, cancel=None):
     """Returns (text, truncated). Raises ClaudeError, or Cancelled if `cancel` gets set."""
     exe = find_claude(settings)
     if not exe:
         raise ClaudeError(INSTALL_HELP)
-    timeout = float(settings.get("timeout_seconds") or 300)
+    idle = float(settings.get("timeout_seconds") or 300)
     fd, system_file = tempfile.mkstemp(prefix="claude-lo-", suffix=".txt")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -120,7 +126,7 @@ def ask(settings, system, user_text, cancel=None):
                                     cwd=tempfile.gettempdir(), creationflags=flags)
         except OSError as e:
             raise ClaudeError("Couldn't start Claude Code (%s): %s" % (exe, e)) from None
-        stdout, stderr = _communicate(proc, user_text.encode("utf-8"), timeout, cancel)
+        stdout, stderr = _communicate(proc, user_text.encode("utf-8"), idle, cancel)
     finally:
         try:
             os.remove(system_file)
@@ -129,36 +135,83 @@ def ask(settings, system, user_text, cancel=None):
     return parse_output(proc.returncode, stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace"))
 
 
-def _communicate(proc, data, timeout, cancel):
-    """proc.communicate, but give up on timeout or when `cancel` (a threading.Event) is set."""
-    deadline = time.time() + timeout
-    while True:
+def _communicate(proc, data, idle, cancel, max_seconds=None):
+    """Feed stdin, collect stdout/stderr. Give up when nothing arrives for `idle` seconds, after
+    max_seconds in all, or when `cancel` (a threading.Event) is set."""
+    import threading
+    out, err = [], []
+    last = [time.time()]
+
+    def feed():
         try:
-            return proc.communicate(data, timeout=0.2)
-        except subprocess.TimeoutExpired:
-            data = None          # already sent; retries must not pass it again
-            if cancel is not None and cancel.is_set():
-                proc.kill()
-                proc.communicate()
-                raise Cancelled() from None
-            if time.time() > deadline:
-                proc.kill()
-                proc.communicate()
-                raise ClaudeError("Claude Code didn't answer within %d seconds." % timeout) from None
+            proc.stdin.write(data)
+            proc.stdin.close()
+        except OSError:
+            pass
+
+    def read(stream, into):
+        for chunk in iter(lambda: stream.read1(65536) if hasattr(stream, "read1") else stream.read(65536), b""):
+            into.append(chunk)
+            last[0] = time.time()
+
+    workers = [threading.Thread(target=feed, daemon=True),
+               threading.Thread(target=read, args=(proc.stdout, out), daemon=True),
+               threading.Thread(target=read, args=(proc.stderr, err), daemon=True)]
+    for w in workers:
+        w.start()
+    start = time.time()
+    limit = max_seconds or MAX_SECONDS
+    while proc.poll() is None or workers[1].is_alive() or workers[2].is_alive():
+        if proc.poll() is not None:
+            workers[1].join(0.2)
+            workers[2].join(0.2)
+            continue
+        problem = None
+        if cancel is not None and cancel.is_set():
+            problem = Cancelled()
+        elif time.time() - last[0] > idle:
+            problem = ClaudeError("Claude Code stopped responding (nothing for %d seconds)." % idle)
+        elif time.time() - start > limit:
+            problem = ClaudeError("Claude Code was still answering after %d minutes; ask for less at once."
+                                  % (limit // 60))
+        if problem is not None:
+            proc.kill()
+            proc.wait()
+            for stream in (proc.stdout, proc.stderr):
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+            raise problem
+        time.sleep(0.1)
+    for stream in (proc.stdout, proc.stderr):
+        stream.close()
+    return b"".join(out), b"".join(err)
 
 
 def parse_output(returncode, stdout, stderr):
-    try:
-        data = json.loads(stdout)
-    except ValueError:
-        data = None
+    """The answer from Claude Code's output: one JSON result, or a stream of JSON lines ending in one."""
+    data = None
+    for line in reversed(stdout.strip().splitlines()):
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("type", "result") == "result":
+            data = event
+            break
+    if data is None:
+        try:
+            data = json.loads(stdout)
+        except ValueError:
+            data = None
     if not isinstance(data, dict):
         detail = (stderr or stdout).strip() or "exit code %d" % returncode
-        raise ClaudeError(_explain(detail))
+        raise ClaudeError(_explain(detail[-2000:]))
     text = (data.get("result") or "").strip()
     if data.get("is_error") or returncode != 0:
         raise ClaudeError(_explain(text or stderr.strip() or data.get("subtype") or "unknown error"))
-    return text, False
+    return text, data.get("stop_reason") == "max_tokens"
 
 
 def _explain(detail):

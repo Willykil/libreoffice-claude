@@ -21,6 +21,15 @@ def main():
         import time
         time.sleep(1)
         mode = "ok"
+    if mode == "streaming":
+        # Like a long answer: partial events trickle in for longer than the idle timeout in all.
+        import time
+        for i in range(6):
+            print(json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                                                                "delta": {"type": "text_delta", "text": "x"}}}),
+                  flush=True)
+            time.sleep(0.4)
+        mode = "ok"
     if mode == "ok":
         print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
                           "result": os.environ.get("FAKE_CLAUDE_REPLY", "fake reply")}))
