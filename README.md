@@ -68,6 +68,9 @@ run straight away.
 That's it - no API key needed. Requires LibreOffice 7.0 or newer. On Linux distro builds, install
 `python3-uno` if the Claude menu doesn't appear.
 
+**Updating:** *Tools > Extensions > Check for Updates*, *Install*, then restart LibreOffice. No
+need to download the file again.
+
 ## Things to know
 
 - **It uses your Claude subscription** through your own Claude Code install, the way Anthropic
@@ -118,7 +121,7 @@ extension/                 the .oxt contents
   pythonpath/claude_actions.py   prompts and quick actions
   pythonpath/claude_voice.py     My voice: samples, learning, the voice in rewrites
   pythonpath/claude_dialogs.py   the one native message box (if the panel can't open)
-build.py                   zips extension/ into claude-for-libreoffice.oxt
+build.py                   zips extension/ into claude-for-libreoffice.oxt; writes update.xml
 tests/test_api.py          API client against a local mock server
 tests/test_cli.py          Claude Code connection against a fake `claude` (fake_claude.py)
 tests/test_uno.py          installs the .oxt into a throwaway profile, starts headless
@@ -134,5 +137,8 @@ cd tests && python3 -m unittest test_build test_api test_cli test_uno -v    # ne
 node test_diff.js                                                  # still in tests/
 ```
 
-Rebuild the `.oxt` after changing anything under `extension/`; CI (`.github/workflows/libreoffice-claude.yml`)
-runs all of the above and fails if the `.oxt` is stale.
+Rebuild the `.oxt` after changing anything under `extension/`, and raise `<version>` in
+`extension/description.xml`: `build.py` also writes `update.xml`, the feed *Check for Updates*
+reads from `main`, and LibreOffice only offers a higher version. CI (`.github/workflows/ci.yml`)
+runs all of the above and fails if the `.oxt` or `update.xml` is stale, or if a pull request
+changes `extension/` without raising the version.
