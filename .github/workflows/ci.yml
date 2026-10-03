@@ -19,7 +19,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            libreoffice-writer libreoffice-calc python3-uno
+            libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw python3-uno
       # System python3: python3-uno is built for it, not for setup-python's interpreters.
       - name: Committed .oxt matches extension/
         run: /usr/bin/python3 -m unittest test_build -v

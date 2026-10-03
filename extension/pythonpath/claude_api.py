@@ -22,6 +22,8 @@ DEFAULT_SETTINGS = {
     "max_tokens": 16000,
     "instructions_writer": "",    # standing instructions, kept separately per app like the M365 add-ins
     "instructions_calc": "",
+    "instructions_impress": "",
+    "instructions_draw": "",
     "track_changes": False,      # Writer: insert Claude's edits as tracked changes
     "native_sidebar": False,     # Windows: keep the sidebar's simple version instead of the full panel
     "base_url": "https://api.anthropic.com",

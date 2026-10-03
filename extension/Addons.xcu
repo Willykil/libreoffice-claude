@@ -5,13 +5,13 @@
     <node oor:name="OfficeMenuBar">
       <node oor:name="org.willykil.claude.menu" oor:op="replace">
         <prop oor:name="Title" oor:type="xs:string"><value xml:lang="en-US">C~laude</value></prop>
-        <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument</value></prop>
+        <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument,com.sun.star.presentation.PresentationDocument,com.sun.star.drawing.DrawingDocument</value></prop>
         <node oor:name="Submenu">
           <node oor:name="m1" oor:op="replace">
             <prop oor:name="URL" oor:type="xs:string"><value>service:org.willykil.claude.Job?ask</value></prop>
             <prop oor:name="Title" oor:type="xs:string"><value xml:lang="en-US">~Ask Claude...</value></prop>
             <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
-            <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument</value></prop>
+            <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument,com.sun.star.presentation.PresentationDocument,com.sun.star.drawing.DrawingDocument</value></prop>
           </node>
           <node oor:name="m2" oor:op="replace">
             <prop oor:name="URL" oor:type="xs:string"><value>service:org.willykil.claude.Job?improve</value></prop>
@@ -23,13 +23,13 @@
             <prop oor:name="URL" oor:type="xs:string"><value>service:org.willykil.claude.Job?summarize</value></prop>
             <prop oor:name="Title" oor:type="xs:string"><value xml:lang="en-US">~Summarize</value></prop>
             <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
-            <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument</value></prop>
+            <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument,com.sun.star.presentation.PresentationDocument,com.sun.star.drawing.DrawingDocument</value></prop>
           </node>
           <node oor:name="m4" oor:op="replace">
             <prop oor:name="URL" oor:type="xs:string"><value>service:org.willykil.claude.Job?explain</value></prop>
             <prop oor:name="Title" oor:type="xs:string"><value xml:lang="en-US">~Explain Selection</value></prop>
             <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
-            <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument</value></prop>
+            <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument,com.sun.star.presentation.PresentationDocument,com.sun.star.drawing.DrawingDocument</value></prop>
           </node>
           <node oor:name="m5" oor:op="replace">
             <prop oor:name="URL" oor:type="xs:string"><value>private:separator</value></prop>
@@ -38,7 +38,7 @@
             <prop oor:name="URL" oor:type="xs:string"><value>service:org.willykil.claude.Job?settings</value></prop>
             <prop oor:name="Title" oor:type="xs:string"><value xml:lang="en-US">S~ettings...</value></prop>
             <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
-            <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument</value></prop>
+            <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument,com.sun.star.presentation.PresentationDocument,com.sun.star.drawing.DrawingDocument</value></prop>
           </node>
         </node>
       </node>
@@ -49,14 +49,14 @@
           <prop oor:name="URL" oor:type="xs:string"><value>service:org.willykil.claude.Job?ask</value></prop>
           <prop oor:name="Title" oor:type="xs:string"><value xml:lang="en-US">Ask Claude</value></prop>
           <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
-          <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument</value></prop>
+          <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument,com.sun.star.presentation.PresentationDocument,com.sun.star.drawing.DrawingDocument</value></prop>
           <prop oor:name="ControlType" oor:type="xs:string"><value>ImageButton</value></prop>
         </node>
         <node oor:name="n2" oor:op="replace">
           <prop oor:name="URL" oor:type="xs:string"><value>service:org.willykil.claude.Job?settings</value></prop>
           <prop oor:name="Title" oor:type="xs:string"><value xml:lang="en-US">Claude Settings</value></prop>
           <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
-          <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument</value></prop>
+          <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.text.TextDocument,com.sun.star.sheet.SpreadsheetDocument,com.sun.star.presentation.PresentationDocument,com.sun.star.drawing.DrawingDocument</value></prop>
           <prop oor:name="ControlType" oor:type="xs:string"><value>ImageButton</value></prop>
         </node>
       </node>
@@ -90,6 +90,36 @@
               <prop oor:name="Title" oor:type="xs:string"><value xml:lang="en-US">Ask Claude</value></prop>
               <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
               <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.sheet.SpreadsheetDocument</value></prop>
+            </node>
+          </node>
+        </node>
+        <node oor:name="impress" oor:op="replace">
+          <prop oor:name="MergeToolBar" oor:type="xs:string"><value>standardbar</value></prop>
+          <prop oor:name="MergePoint" oor:type="xs:string"><value>.uno:Redo</value></prop>
+          <prop oor:name="MergeCommand" oor:type="xs:string"><value>AddAfter</value></prop>
+          <prop oor:name="MergeFallback" oor:type="xs:string"><value>AddLast</value></prop>
+          <prop oor:name="MergeContext" oor:type="xs:string"><value>com.sun.star.presentation.PresentationDocument</value></prop>
+          <node oor:name="ToolBarItems">
+            <node oor:name="t1" oor:op="replace">
+              <prop oor:name="URL" oor:type="xs:string"><value>service:org.willykil.claude.Job?ask</value></prop>
+              <prop oor:name="Title" oor:type="xs:string"><value xml:lang="en-US">Ask Claude</value></prop>
+              <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
+              <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.presentation.PresentationDocument</value></prop>
+            </node>
+          </node>
+        </node>
+        <node oor:name="draw" oor:op="replace">
+          <prop oor:name="MergeToolBar" oor:type="xs:string"><value>standardbar</value></prop>
+          <prop oor:name="MergePoint" oor:type="xs:string"><value>.uno:Redo</value></prop>
+          <prop oor:name="MergeCommand" oor:type="xs:string"><value>AddAfter</value></prop>
+          <prop oor:name="MergeFallback" oor:type="xs:string"><value>AddLast</value></prop>
+          <prop oor:name="MergeContext" oor:type="xs:string"><value>com.sun.star.drawing.DrawingDocument</value></prop>
+          <node oor:name="ToolBarItems">
+            <node oor:name="t1" oor:op="replace">
+              <prop oor:name="URL" oor:type="xs:string"><value>service:org.willykil.claude.Job?ask</value></prop>
+              <prop oor:name="Title" oor:type="xs:string"><value xml:lang="en-US">Ask Claude</value></prop>
+              <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
+              <prop oor:name="Context" oor:type="xs:string"><value>com.sun.star.drawing.DrawingDocument</value></prop>
             </node>
           </node>
         </node>

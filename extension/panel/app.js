@@ -91,6 +91,15 @@ function toast(text, isError) {
 
 function scrollDown() { thread.scrollTop = thread.scrollHeight; }
 const isWriter = () => !!(state.doc && state.doc.kind === "writer");
+// Claude writes its replies into Writer and Calc; in Impress and Draw they are copied for now.
+const canWrite = (kind) => kind === "writer" || kind === "calc";
+const KIND_ICON = { calc: "sheet", impress: "slides", draw: "slides" };
+const KIND_NAME = { writer: "Document", calc: "Spreadsheet", impress: "Presentation", draw: "Drawing" };
+const WELCOME = {
+  calc: "Select some cells, then pick an action below or ask me anything about your workbook.",
+  impress: "Pick an action below or ask me anything about your presentation.",
+  draw: "Pick an action below or ask me anything about your drawing.",
+};
 const hasSelection = () => !!(state.doc && state.doc.has_selection);
 
 /* ---------------------------------------------------------------- state */
@@ -100,12 +109,11 @@ function modelName(id) { return (MODEL_INFO[id] || [id])[0]; }
 function renderState() {
   const doc = state.doc;
   $("context").classList.toggle("has-selection", hasSelection());
-  $("contextIcon").replaceChildren(...icon(doc && doc.kind === "calc" ? "sheet" : "doc").childNodes);
-  $("docTitle").textContent = doc ? (doc.title || (doc.kind === "calc" ? "Spreadsheet" : "Document")) : "No document";
-  $("ctxLabel").textContent = doc ? doc.label : "Open a Writer document or Calc spreadsheet.";
-  $("welcomeSub").textContent = doc && doc.kind === "calc"
-    ? "Select some cells, then pick an action below or ask me anything about your workbook."
-    : "Select some text, then pick an action below or ask me anything about your document.";
+  $("contextIcon").replaceChildren(...icon(KIND_ICON[doc && doc.kind] || "doc").childNodes);
+  $("docTitle").textContent = doc ? (doc.title || KIND_NAME[doc.kind] || "Document") : "No document";
+  $("ctxLabel").textContent = doc ? doc.label : "Open a document, spreadsheet or presentation.";
+  $("welcomeSub").textContent = WELCOME[doc && doc.kind]
+    || "Select some text, then pick an action below or ask me anything about your document.";
   $("connection").textContent = state.connection === "api"
     ? "Using your Anthropic API key (billed per use)"
     : "Using your Claude subscription";
@@ -216,13 +224,16 @@ $("trackedTag").addEventListener("click", () => saveSetting({ track_changes: fal
 
 /* ---------------------------------------------------------------- citations */
 
-// [P12] / [P12-P14] in Writer answers; [B3], [B2:C9], [Data!C4], ['My sheet'!A1] in Calc answers.
-const CITE = /\[(P\d+(?:\s*[-–]\s*P?\d+)?|(?:(?:'(?:[^']|'')+'|[A-Za-z_][\w.]*)!)?\$?[A-Z]{1,3}\$?\d{1,7}(?::\$?[A-Z]{1,3}\$?\d{1,7})?)\]/g;
+// [P12] / [P12-P14] in Writer answers; [B3], [B2:C9], [Data!C4], ['My sheet'!A1] in Calc answers;
+// [S3] / [S3-S5] (slide or page 3) in Impress and Draw answers.
+const CITE = /\[(P\d+(?:\s*[-–]\s*P?\d+)?|S\d+(?:\s*[-–]\s*S?\d+)?|(?:(?:'(?:[^']|'')+'|[A-Za-z_][\w.]*)!)?\$?[A-Z]{1,3}\$?\d{1,7}(?::\$?[A-Z]{1,3}\$?\d{1,7})?)\]/g;
 const stripCites = (t) => t.replace(/\s?\[P\d+(?:\s*[-–]\s*P?\d+)?\]/g, "");
 
 function citeLabel(ref) {
   const m = /^P(\d+)(?:\s*[-–]\s*P?(\d+))?$/.exec(ref);
   if (m) return "¶" + m[1] + (m[2] ? "–" + m[2] : "");
+  const s = /^S(\d+)(?:\s*[-–]\s*S?(\d+))?$/.exec(ref);
+  if (s) return (state.doc && state.doc.kind === "draw" ? "Page " : "Slide ") + s[1] + (s[2] ? "–" + s[2] : "");
   return ref.replace(/\$/g, "");
 }
 
@@ -329,10 +340,13 @@ function addAnswerCard(res) {
   body.appendChild(richText(res.text));
   c.body.appendChild(body);
   if (res.truncated) c.body.appendChild(el("p", "card-note", "The reply was cut off at the length limit."));
-  const replace = button(res.selection ? "Replace selection" : "Insert at cursor", "primary", null,
-    () => apply(res.text, "replace", replace, c.card));
-  const below = button("Insert below", "", null, () => apply(res.text, "after", below, c.card));
-  c.actions.append(replace, below, el("span", "spacer"), copyButton(res.text));
+  if (canWrite(res.kind)) {
+    const replace = button(res.selection ? "Replace selection" : "Insert at cursor", "primary", null,
+      () => apply(res.text, "replace", replace, c.card));
+    const below = button("Insert below", "", null, () => apply(res.text, "after", below, c.card));
+    c.actions.append(replace, below);
+  }
+  c.actions.append(el("span", "spacer"), copyButton(res.text));
   wrapMsg(c.card);
 }
 
@@ -646,6 +660,8 @@ async function openSettings() {
   form.elements.backend.value = s.backend;
   form.elements.instructions_writer.value = s.instructions_writer || "";
   form.elements.instructions_calc.value = s.instructions_calc || "";
+  form.elements.instructions_impress.value = s.instructions_impress || "";
+  form.elements.instructions_draw.value = s.instructions_draw || "";
   form.elements.claude_path.value = s.claude_path || "";
   form.elements.max_tokens.value = s.max_tokens;
   form.elements.native_sidebar.checked = !!s.native_sidebar;
@@ -663,7 +679,8 @@ form.addEventListener("submit", async (e) => {
   const f = form.elements;
   const body = {
     backend: f.backend.value, instructions_writer: f.instructions_writer.value,
-    instructions_calc: f.instructions_calc.value, claude_path: f.claude_path.value, max_tokens: f.max_tokens.value,
+    instructions_calc: f.instructions_calc.value, instructions_impress: f.instructions_impress.value,
+    instructions_draw: f.instructions_draw.value, claude_path: f.claude_path.value, max_tokens: f.max_tokens.value,
     native_sidebar: f.native_sidebar.checked,
   };
   if (f.api_key.value.trim()) body.api_key = f.api_key.value.trim();
@@ -702,7 +719,7 @@ async function openHistory() {
   } else {
     list.replaceChildren(...items.map((c) => {
       const row = el("div", "history-item");
-      row.appendChild(icon(c.kind === "calc" ? "sheet" : "doc", "h-icon"));
+      row.appendChild(icon(KIND_ICON[c.kind] || "doc", "h-icon"));
       const main = el("div", "h-main");
       main.append(el("div", "h-title", c.title || "Untitled conversation"),
                   el("div", "h-meta", [c.doc, when(c.updated)].filter(Boolean).join(" · ")));

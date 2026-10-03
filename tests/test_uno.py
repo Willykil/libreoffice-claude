@@ -195,8 +195,9 @@ class UnoTest(unittest.TestCase):
         tab = node.getByName("OfficeNotebookBar").getByName("org.willykil.claude.notebookbar")
         self.assertEqual(tab.getByName("n1").getPropertyValue("URL"), "service:org.willykil.claude.Job?ask")
         merging = node.getByName("OfficeToolbarMerging").getByName("org.willykil.claude")
-        for name in ("writer", "calc"):
+        for name in ("writer", "calc", "impress", "draw"):
             self.assertEqual(merging.getByName(name).getPropertyValue("MergeToolBar"), "standardbar")
+        self.assertIn("com.sun.star.presentation.PresentationDocument", menu.getPropertyValue("Context"))
 
     def test_settings_path_in_profile(self):
         path = claude_actions.settings_path(self.ctx)
@@ -684,6 +685,98 @@ class UnoTest(unittest.TestCase):
         # Writing into empty cells needs no confirmation.
         doc.getCurrentController().select(sheet.getCellRangeByName("A1:B3"))
         self.assertTrue(self.api("/api/apply", {"text": "Total\t7.5", "mode": "after"})["ok"])
+
+
+    # ---- Impress and Draw (read only for now)
+
+    def impress_deck(self):
+        doc = self.open("simpress")
+        pages = doc.getDrawPages()
+        first = pages.getByIndex(0)
+        first.getByIndex(0).setString("Quarterly review")              # title placeholder
+        first.getByIndex(1).setString("Sales team")                    # subtitle placeholder
+        second = pages.insertNewByIndex(0)
+        second.Layout = 1                                              # title, content
+        shapes = {second.getByIndex(i).getShapeType().rsplit(".", 1)[-1]: second.getByIndex(i)
+                  for i in range(second.getCount())}
+        shapes["TitleTextShape"].setString("Results")
+        outline = shapes["OutlinerShape"]
+        outline.setString("Revenue up\nNew region")
+        paras = outline.getText().createEnumeration()
+        paras.nextElement()
+        paras.nextElement().setPropertyValue("NumberingLevel", 1)
+        notes = second.getNotesPage()
+        for i in range(notes.getCount()):
+            if notes.getByIndex(i).getShapeType().endswith("NotesShape"):
+                notes.getByIndex(i).setString("Mention the new hires.")
+        table = doc.createInstance("com.sun.star.drawing.TableShape")
+        second.add(table)
+        table.Model.getCellByPosition(0, 0).setString("Q3")
+        comment = second.createAndInsertAnnotation()
+        comment.Author = "Ann"
+        comment.TextRange.setString("Add a chart")
+        doc.getCurrentController().setCurrentPage(second)
+        return doc, outline
+
+    def test_impress_reads_the_deck(self):
+        doc, _ = self.impress_deck()
+        state = self.api("/api/state")
+        self.assertEqual(state["doc"]["kind"], "impress")
+        self.assertFalse(state["doc"]["writable"])
+        self.assertEqual(state["doc"]["label"], "Slide 2 - Claude reads the whole presentation (2 slides)")
+        self.assertIn("Speaker notes", [q["label"] for q in state["quick"]])
+        self.mock.text("Revenue is up [S2].")
+        res = self.api("/api/ask", {"instruction": "what changed?"})
+        self.assertEqual(res["text"], "Revenue is up [S2].")
+        prompt = self.last_prompt()
+        self.assertIn("[S1] Slide 1\nTitle: Quarterly review\nSubtitle: Sales team", prompt)
+        self.assertIn("[S2] Slide 2\nTitle: Results\n- Revenue up\n  - New region\n(table)\nQ3", prompt)
+        self.assertIn("Speaker notes: Mention the new hires.", prompt)
+        self.assertIn("Comment by Ann: Add a chart", prompt)
+        self.assertIn("The user is on slide 2.", prompt)
+        self.assertIn("Nothing is selected.", prompt)
+        self.assertIn("LibreOffice Impress", self.last_system())
+
+    def test_impress_selection_and_slide_citations(self):
+        doc, outline = self.impress_deck()
+        ctl = doc.getCurrentController()
+        ctl.select(outline)
+        self.assertEqual(claude_office.selection_summary(doc), ("Selection: 1 shape on slide 2", True))
+        self.api("/api/ask", {"instruction": "shorter"})
+        self.assertIn("<selection>\n- Revenue up\n  - New region\n</selection>", self.last_prompt())
+        self.api("/api/goto", {"ref": "S1"})
+        self.assertEqual(ctl.getCurrentPage(), doc.getDrawPages().getByIndex(0))
+        self.assertIn("isn't there", self.api("/api/goto", {"ref": "S9"})["error"])
+        self.assertIn("copy the reply", self.api("/api/apply", {"text": "x", "mode": "replace"})["error"])
+
+    def test_impress_instructions_apply(self):
+        self.impress_deck()
+        self.api("/api/settings", {"instructions_impress": "IMPRESS-RULE"})
+        self.api("/api/ask", {"instruction": "hi"})
+        self.assertIn("IMPRESS-RULE", self.last_system())
+
+    def test_draw_reads_pages(self):
+        doc = self.open("sdraw")
+        page = doc.getDrawPages().getByIndex(0)
+        box = doc.createInstance("com.sun.star.drawing.TextShape")
+        page.add(box)
+        box.setString("Loading dock")
+        picture = doc.createInstance("com.sun.star.drawing.GraphicObjectShape")
+        page.add(picture)
+        picture.Title = "Floor plan"
+        state = self.api("/api/state")
+        self.assertEqual((state["doc"]["kind"], state["doc"]["writable"]), ("draw", False))
+        self.api("/api/ask", {"instruction": "what is this?"})
+        self.assertIn("[S1] Page 1\nLoading dock\n(picture: Floor plan)", self.last_prompt())
+        self.assertIn("LibreOffice Draw", self.last_system())
+
+    def test_sidebar_panel_builds_in_impress(self):
+        doc, _ = self.impress_deck()
+        frame = doc.getCurrentController().getFrame()
+        factory = self.ctx.ServiceManager.createInstanceWithContext("org.willykil.claude.PanelFactory", self.ctx)
+        element = factory.createUIElement("private:resource/toolpanel/ClaudePanelFactory/ClaudePanel",
+                                          (_prop("Frame", frame), _prop("ParentWindow", frame.getContainerWindow())))
+        self.assertIsNotNone(element.getRealInterface().Window)
 
 
 if __name__ == "__main__":
