@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Lets LibreOffice build the Claude sidebar panel (claude_sidebar.PanelFactory). -->
+<oor:component-data xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                    oor:name="Factories" oor:package="org.openoffice.Office.UI">
+  <node oor:name="Registered">
+    <node oor:name="UIElementFactories">
+      <node oor:name="org.willykil.claude.PanelFactory" oor:op="replace">
+        <prop oor:name="Type"><value>toolpanel</value></prop>
+        <prop oor:name="Name"><value>ClaudePanelFactory</value></prop>
+        <prop oor:name="Module"><value/></prop>
+        <prop oor:name="FactoryImplementation"><value>org.willykil.claude.PanelFactory</value></prop>
+      </node>
+    </node>
+  </node>
+</oor:component-data>
