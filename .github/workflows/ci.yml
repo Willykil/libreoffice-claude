@@ -35,6 +35,6 @@ jobs:
       - name: Committed .oxt matches extension/
         run: /usr/bin/python3 -m unittest test_build -v
       - name: Python tests
-        run: /usr/bin/python3 -m unittest test_api test_cli test_uno -v
+        run: /usr/bin/python3 -m unittest test_api test_cli test_edits test_uno -v
       - name: Panel diff tests
         run: node test_diff.js

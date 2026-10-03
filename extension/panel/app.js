@@ -323,6 +323,7 @@ function copyButton(text) {
 }
 
 function addReply(res) {
+  if (res.edits) return addEditsCard(res);
   if (res.grid) return addGridCard(res);
   if (res.kind === "writer" && res.selection && res.selection.trim()) {
     const proposed = stripCites(res.text);
@@ -347,6 +348,46 @@ function addAnswerCard(res) {
     c.actions.append(replace, below);
   }
   c.actions.append(el("span", "spacer"), copyButton(res.text));
+  wrapMsg(c.card);
+}
+
+// Claude changed the document itself: what it did, what it couldn't, and one Undo for all of it.
+function addEditsCard(res) {
+  const done = res.edits.done || [], failed = res.edits.failed || [];
+  const c = cardShell(done.length ? (done.length === 1 ? "1 edit made" : done.length + " edits made")
+                                  : "No edits made");
+  if (res.text) {
+    const body = el("div", "card-body");
+    body.appendChild(richText(res.text));
+    c.body.appendChild(body);
+  }
+  const list = el("ul", "edits");
+  for (const line of done) {
+    const li = el("li", "ok");
+    li.append(icon("check"), el("span", "", line));
+    list.appendChild(li);
+  }
+  for (const line of failed) {
+    const li = el("li", "bad");
+    li.append(icon("x"), el("span", "", line));
+    list.appendChild(li);
+  }
+  if (done.length || failed.length) c.body.appendChild(list);
+  if (res.truncated) c.body.appendChild(el("p", "card-note", "The reply was cut off at the length limit."));
+  if (done.length) {
+    const note = el("span", "status-note", res.edits.tracked ? "Tracked changes · accept or reject them in Writer"
+                                                             : "Ctrl+Z in LibreOffice also undoes them");
+    const undo = button("Undo", "", null, async () => {
+      let r;
+      try { r = await api("/api/undo", {}); } catch (e) { r = { error: e.message }; }
+      if (r.error) return toast(r.error, true);
+      c.card.classList.add("rejected");
+      c.actions.replaceChildren(el("span", "status-note", "Undone — the document is back as it was"));
+    });
+    c.actions.append(undo, note);
+  } else {
+    c.actions.remove();
+  }
   wrapMsg(c.card);
 }
 
@@ -502,7 +543,7 @@ function addError(text, extra) {
 }
 
 function historyForApi() {
-  return chat.messages.map((m) => ({ role: m.role, text: m.text }));
+  return chat.messages.map((m) => ({ role: m.role, text: m.history_text || m.text }));
 }
 
 async function ask(body, shownText) {
@@ -538,6 +579,7 @@ async function ask(body, shownText) {
     }
     addReply(res);
     api("/api/history", { save: chat }).catch(() => {});
+    if (res.edits && res.edits.done && res.edits.done.length) poll();      // the selection label may have changed
   }
   renderState();
   promptBox.focus();

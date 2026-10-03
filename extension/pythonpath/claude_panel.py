@@ -27,6 +27,7 @@ import tempfile
 
 import claude_actions
 import claude_api
+import claude_edits
 import claude_office
 import claude_voice
 
@@ -160,6 +161,8 @@ class PanelServer:
         if voice is not None:
             system += claude_voice.system_addition(voice)
         user_text = conversation_prompt(context.text, body.get("history") or [], instruction)
+        # The paragraphs as Claude sees them, so its [P12] edits land there even if the user types meanwhile.
+        paragraphs = claude_office.writer_paragraphs(doc) if context.kind == claude_office.WRITER else None
 
         result = self._claude(settings, system, user_text)
         if isinstance(result, dict):
@@ -167,6 +170,22 @@ class PanelServer:
         text, truncated = result
         if not text:
             return {"error": "Claude returned an empty reply."}
+        text, ops, problem = claude_edits.parse(text)
+        if ops or problem:
+            edits = {"done": [], "failed": [problem] if problem else []}
+            if ops:
+                try:
+                    result = claude_edits.apply(doc, ops, settings.get("track_changes"), paragraphs)
+                except Exception as e:      # the document was closed meanwhile, say
+                    result = {"done": [], "failed": ["Couldn't edit the document: %s" % e]}
+                edits["done"] += result["done"]
+                edits["failed"] += result["failed"]
+            edits["tracked"] = bool(edits["done"] and settings.get("track_changes")
+                                    and context.kind == claude_office.WRITER)
+            return {"text": text or ("Done." if edits["done"] else ""), "truncated": truncated,
+                    "kind": context.kind, "grid": None, "edits": edits, "selection": "",
+                    "history_text": claude_edits.summary_for_history(text, edits),
+                    "voice": voice is not None, "voice_samples": len(voice["samples"]) if voice else 0}
         grid = None
         if context.kind == claude_office.CALC:
             rows = claude_office.parse_grid(text)
@@ -316,6 +335,16 @@ class PanelServer:
             return {"error": str(e)}
         return {"ok": True, "tracked": bool(settings.get("track_changes"))
                 and claude_office.doc_kind(doc) == claude_office.WRITER}
+
+    def undo(self, body):
+        doc = self.document()
+        if doc is None:
+            return {"error": "Open a document, spreadsheet or presentation first."}
+        try:
+            claude_edits.undo_last(doc)
+        except claude_edits.EditError as e:
+            return {"error": str(e)}
+        return {"ok": True}
 
     def goto(self, body):
         doc = self.document()
@@ -496,7 +525,7 @@ def _handler(panel):
             except ValueError:
                 return self._send(400, {"error": "bad request"})
             routes = {"/api/ask": panel.ask, "/api/apply": panel.apply, "/api/settings": panel.set_settings,
-                      "/api/cancel": lambda b: panel.cancel(), "/api/goto": panel.goto,
+                      "/api/cancel": lambda b: panel.cancel(), "/api/goto": panel.goto, "/api/undo": panel.undo,
                       "/api/history": panel.history, "/api/voice": panel.voice}
             fn = routes.get(urlparse(self.path).path)
             if fn is None:

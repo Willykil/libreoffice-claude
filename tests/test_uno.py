@@ -687,6 +687,168 @@ class UnoTest(unittest.TestCase):
         self.assertTrue(self.api("/api/apply", {"text": "Total\t7.5", "mode": "after"})["ok"])
 
 
+    # ---- Claude editing the document directly
+
+    def edits(self, note, ops):
+        return "%s\n\n<edits>\n%s\n</edits>" % (note, json.dumps(ops))
+
+    def writer_essay(self):
+        doc = self.open("swriter")
+        text = doc.getText()
+        cur = text.createTextCursor()
+        for i, line in enumerate(["Une introduction sur la mémoire de travail.",
+                                  "La surcharge cognitive nuit à l’apprentissage, dit l’étude.",
+                                  "Paragraphe à supprimer.",
+                                  "En conclusion, la mémoire de travail est limitée."]):
+            if i:
+                text.insertControlCharacter(cur, 0, False)
+            text.insertString(cur, line, False)
+        return doc
+
+    def char(self, doc, para, needle, prop):
+        desc = doc.createSearchDescriptor()
+        desc.SearchString = needle
+        found = doc.findAll(desc)
+        values = [found.getByIndex(i).getPropertyValue(prop) for i in range(found.getCount())]
+        return values
+
+    def test_writer_edits_format_comment_replace_and_undo(self):
+        doc = self.writer_essay()
+        self.mock.text(self.edits("J'ai surligné les idées clés [P1].", [
+            {"op": "format", "para": 1, "find": "mémoire de travail", "highlight": "yellow"},
+            {"op": "format", "para": 2, "find": "La surcharge cognitive", "underline": True, "bold": True},
+            {"op": "format", "find": "l'apprentissage", "italic": True},     # straight quote, curly in the text
+            {"op": "comment", "para": 2, "find": "l’étude", "text": "Quelle étude ?"},
+            {"op": "replace", "para": 4, "find": "est limitée", "with": "a une capacité limitée"},
+            {"op": "delete", "para": 3},
+            {"op": "insert", "para": 1, "text": "Nouveau paragraphe."},
+            {"op": "format", "para": 2, "find": "introuvable", "bold": True},
+            {"op": "style", "para": 1, "style": "Heading 1"},
+        ]))
+        res = self.api("/api/ask", {"instruction": "Surligne les idées clés"})
+        self.assertIn("change, format, mark up", self.last_system())
+        self.assertEqual(res["text"], "J'ai surligné les idées clés [P1].")
+        self.assertEqual(len(res["edits"]["done"]), 8, res["edits"])
+        self.assertEqual(len(res["edits"]["failed"]), 1)
+        self.assertIn("Couldn't find \u201cintrouvable\u201d in \u00b62", res["edits"]["failed"][0])
+        self.assertIn("(Edits applied:", res["history_text"])
+        self.assertEqual(self.paragraphs(doc), [
+            "Une introduction sur la mémoire de travail.", "Nouveau paragraphe.",
+            "La surcharge cognitive nuit à l’apprentissage, dit l’étude.",
+            "En conclusion, la mémoire de travail a une capacité limitée."])
+        # Only the paragraph-1 match is highlighted, not the one in the conclusion.
+        self.assertEqual(self.char(doc, 1, "mémoire de travail", "CharBackColor"), [0xFFFF00, -1])
+        self.assertEqual(self.char(doc, 2, "La surcharge", "CharWeight"), [150.0])
+        self.assertEqual(self.char(doc, 2, "La surcharge", "CharUnderline"), [1])
+        self.assertEqual(self.char(doc, 2, "apprentissage", "CharPosture").__len__(), 1)
+        self.assertEqual(self.char(doc, 2, "apprentissage", "CharPosture")[0].value, "ITALIC")
+        first = doc.getText().createEnumeration().nextElement()
+        self.assertEqual(first.ParaStyleName, "Heading 1")
+        self.assertIn("Comments in the document:\n- Claude (on \"l’étude\"): Quelle étude ?",
+                      claude_office.writer_review_notes(doc))
+        # One step undoes everything, from the panel.
+        self.assertEqual(self.api("/api/undo", {}), {"ok": True})
+        self.assertEqual(self.paragraphs(doc), [
+            "Une introduction sur la mémoire de travail.",
+            "La surcharge cognitive nuit à l’apprentissage, dit l’étude.",
+            "Paragraphe à supprimer.", "En conclusion, la mémoire de travail est limitée."])
+        self.assertEqual(self.char(doc, 1, "mémoire de travail", "CharBackColor"), [-1, -1])
+        self.assertEqual(claude_office.writer_review_notes(doc), "")
+        self.assertIn("Something else", self.api("/api/undo", {})["error"])
+
+    def test_writer_edits_follow_tracked_changes(self):
+        doc = self.writer_essay()
+        self.api("/api/settings", {"track_changes": True})
+        self.mock.text(self.edits("Corrigé.", [{"op": "replace", "find": "nuit à", "with": "freine"}]))
+        res = self.api("/api/ask", {"instruction": "Corrige"})
+        self.assertTrue(res["edits"]["tracked"])
+        types = []
+        e = doc.getRedlines().createEnumeration()
+        while e.hasMoreElements():
+            types.append(e.nextElement().getPropertyValue("RedlineType"))
+        self.assertIn("Insert", types)
+        self.assertIn("Delete", types)
+        self.assertFalse(doc.RecordChanges)
+
+    def test_writer_edits_at_the_end_and_on_the_selection(self):
+        doc = self.writer_with_selection()
+        self.mock.text(self.edits("Fait.", [{"op": "format", "selection": True, "strikethrough": True},
+                                            {"op": "insert", "para": 2, "text": "Après."},
+                                            {"op": "insert", "para": 1, "position": "before", "text": "Titre",
+                                             "style": "Heading 1"},
+                                            {"op": "format", "para": 2, "bold": True},
+                                            {"op": "insert", "at": "end", "text": "Fin.\nVraiment."}]))
+        res = self.api("/api/ask", {"instruction": "Barre la sélection"})
+        self.assertEqual(res["edits"]["failed"], [])
+        self.assertEqual(self.paragraphs(doc), ["Titre", "First paragraph stays.", "this sentense has erors",
+                                                "Après.", "Fin.", "Vraiment."])
+        self.assertEqual(self.char(doc, 2, "this sentense", "CharStrikeout"), [1])
+        # [P2] still means the paragraph Claude saw, though one was added after it and one before.
+        self.assertEqual(self.char(doc, 2, "this sentense", "CharWeight"), [150.0])
+        self.assertEqual(self.char(doc, 2, "Après", "CharWeight"), [100.0])
+        self.assertEqual(doc.getText().createEnumeration().nextElement().ParaStyleName, "Heading 1")
+
+    def test_unreadable_edits_change_nothing(self):
+        doc = self.writer_essay()
+        before = self.paragraphs(doc)
+        self.mock.text("Voilà.\n<edits>\n[{\"op\": \"delete\", \"para\": 1,]\n</edits>")
+        res = self.api("/api/ask", {"instruction": "x"})
+        self.assertEqual(res["text"], "Voilà.")
+        self.assertEqual(res["edits"]["done"], [])
+        self.assertIn("couldn't be read", res["edits"]["failed"][0])
+        self.assertEqual(self.paragraphs(doc), before)
+        self.assertNotEqual(doc.getUndoManager().getCurrentUndoActionTitle(), "Claude edits")
+
+    def test_calc_edits_and_undo(self):
+        doc, sheet = self.calc_with_data()
+        doc.getCurrentController().select(sheet.getCellRangeByName("A1"))
+        self.mock.text(self.edits("Total ajouté en [A4:B4].", [
+            {"op": "set", "range": "A4", "values": [["Total", "=SUM(B2:B3)"]]},
+            {"op": "format", "range": "A1:B1", "bold": True, "background": "yellow"},
+            {"op": "format", "range": "B2:B4", "number_format": "0.00"},
+            {"op": "comment", "range": "B3", "text": "Prix à vérifier"},
+            {"op": "set", "range": "'Sheet 2'!A1", "value": "=Sheet1.B4"},
+            {"op": "format", "range": "Nope!A1", "bold": True},
+        ]))
+        doc.getSheets().insertNewByName("Sheet 2", 1)
+        res = self.api("/api/ask", {"instruction": "Ajoute un total"})
+        self.assertIn("change the workbook directly", self.last_system())
+        self.assertEqual(len(res["edits"]["done"]), 5, res["edits"])
+        self.assertIn("no sheet called", res["edits"]["failed"][0])
+        self.assertEqual(sheet.getCellRangeByName("A4").getString(), "Total")
+        self.assertEqual(sheet.getCellRangeByName("B4").getValue(), 7.5)
+        self.assertEqual(sheet.getCellRangeByName("A1").CharWeight, 150.0)
+        self.assertEqual(sheet.getCellRangeByName("B1").CellBackColor, 0xFFFF00)
+        self.assertEqual(sheet.getCellRangeByName("B4").getPropertyValue("NumberFormat"),
+                         sheet.getCellRangeByName("B2").getPropertyValue("NumberFormat"))
+        self.assertEqual(sheet.getCellRangeByName("B3").getAnnotation().getString(), "Prix à vérifier")
+        self.assertEqual(doc.getSheets().getByName("Sheet 2").getCellRangeByName("A1").getValue(), 7.5)
+        self.assertEqual(self.api("/api/undo", {}), {"ok": True})
+        self.assertEqual(sheet.getCellRangeByName("A4").getString(), "")
+        self.assertNotEqual(sheet.getCellRangeByName("B1").CellBackColor, 0xFFFF00)
+        self.assertEqual(sheet.getCellRangeByName("A1").CharWeight, 100.0)
+        self.assertEqual(sheet.getCellRangeByName("B3").getAnnotation().getString(), "")
+        self.assertEqual(doc.getSheets().getByName("Sheet 2").getCellRangeByName("A1").getFormula(), "")
+
+    def test_calc_row_and_column_edits(self):
+        doc, sheet = self.calc_with_data()
+        self.mock.text(self.edits("Fait.", [{"op": "insert_rows", "at": 2, "count": 1},
+                                            {"op": "insert_columns", "at": "A"},
+                                            {"op": "delete_rows", "at": 4},
+                                            {"op": "clear", "range": "B1"}]))
+        res = self.api("/api/ask", {"instruction": "x"})
+        self.assertEqual(res["edits"]["failed"], [])
+        self.assertEqual(sheet.getCellRangeByName("B1").getString(), "")
+        self.assertEqual(sheet.getCellRangeByName("B3").getString(), "Tea")
+        self.assertEqual(sheet.getCellRangeByName("B4").getString(), "")
+
+    def test_impress_edits_are_refused(self):
+        self.impress_deck()
+        self.mock.text(self.edits("Fait.", [{"op": "format", "para": 1, "bold": True}]))
+        res = self.api("/api/ask", {"instruction": "x"})
+        self.assertEqual(res["edits"]["done"], [])
+        self.assertIn("can't edit slides yet", res["edits"]["failed"][0])
+
     # ---- Impress and Draw (read only for now)
 
     def impress_deck(self):
