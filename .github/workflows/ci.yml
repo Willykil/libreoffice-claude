@@ -20,6 +20,17 @@ jobs:
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
             libreoffice-writer libreoffice-calc libreoffice-impress libreoffice-draw python3-uno
+      # LibreOffice's Check for Updates only offers a higher version than the installed one.
+      - name: Version bumped when extension/ changed
+        if: github.event_name == 'pull_request'
+        working-directory: .
+        run: |
+          git fetch -q --depth=1 origin "${{ github.base_ref }}"
+          git diff --quiet FETCH_HEAD -- extension/ && exit 0
+          old=$(git show FETCH_HEAD:extension/description.xml | grep -oP '<version value="\K[^"]+')
+          new=$(grep -oP '<version value="\K[^"]+' extension/description.xml)
+          python3 -c "import sys; v=lambda s: [int(n) for n in s.split('.')]; sys.exit(v('$new') <= v('$old'))" \
+            || { echo "::error::extension/ changed but version $old -> $new was not raised in extension/description.xml"; exit 1; }
       # System python3: python3-uno is built for it, not for setup-python's interpreters.
       - name: Committed .oxt matches extension/
         run: /usr/bin/python3 -m unittest test_build -v
