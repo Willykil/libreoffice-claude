@@ -53,7 +53,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(call["stdin"], "texte ü")
         argv = call["argv"]
         self.assertIn("-p", argv)
-        self.assertEqual(argv[argv.index("--output-format") + 1], "json")
+        self.assertEqual(argv[argv.index("--output-format") + 1], "stream-json")
+        self.assertIn("--include-partial-messages", argv)
         self.assertEqual(argv[argv.index("--tools") + 1], "")
         for flag in ("--no-session-persistence", "--strict-mcp-config", "--disable-slash-commands"):
             self.assertIn(flag, argv)
@@ -92,6 +93,26 @@ class CliTest(unittest.TestCase):
         os.environ["FAKE_CLAUDE_MODE"] = "delayed"
         self.assertEqual(claude_api.ask(self.settings, "s", "u"), ("fake reply", False))
         self.assertEqual(self.logged()["stdin"], "u")
+
+    def test_long_answer_keeps_going_while_it_streams(self):
+        os.environ["FAKE_CLAUDE_MODE"] = "streaming"
+        settings = dict(self.settings, timeout_seconds=1)
+        self.assertEqual(claude_api.ask(settings, "s", "u"), ("fake reply", False))
+
+    def test_silence_times_out(self):
+        import time
+        os.environ["FAKE_CLAUDE_MODE"] = "slow"
+        start = time.time()
+        with self.assertRaisesRegex(claude_api.ClaudeError, "stopped responding"):
+            claude_api.ask(dict(self.settings, timeout_seconds=1), "s", "u")
+        self.assertLess(time.time() - start, 5)
+
+    def test_stream_output_parsed(self):
+        out = "\n".join([json.dumps({"type": "system", "subtype": "init"}),
+                         json.dumps({"type": "stream_event", "event": {}}),
+                         json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                                     "result": "Bonjour", "stop_reason": "end_turn"})])
+        self.assertEqual(claude_cli.parse_output(0, out, ""), ("Bonjour", False))
 
     def test_cancel_stops_claude_code(self):
         import threading
