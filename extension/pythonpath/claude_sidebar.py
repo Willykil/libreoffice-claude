@@ -31,6 +31,8 @@ import claude_panel
 TOOLPANEL = 7                       # com.sun.star.ui.UIElementType.TOOLPANEL
 POSSIZE = 15                        # com.sun.star.awt.PosSize.POSSIZE
 DECK_COMMAND = ".uno:SidebarDeck.ClaudeDeck"
+TRACKED_HINT = ("Claude's edits show up as tracked changes you accept or reject one by one in Writer "
+                "(Edit > Track Changes > Manage). Off: edits are made directly; Undo still reverts them.")
 MIN_WIDTH = 400                     # px the sidebar opens at; the user can drag it wider
 
 _panels = []                        # open SidebarPanels, so menu actions reach the right one
@@ -313,34 +315,45 @@ class NativePanel:
         self._add("FixedText", "context", Label="", MultiLine=True)
         if writer:
             self._add("FixedText", "toneLabel", Label="Rewrite as")
-            self._add("Button", "formal", lambda: self.rewrite("formal"), Label="Formal")
-            self._add("Button", "voice", lambda: self.rewrite("voice"), Label="My voice")
+            self._add("Button", "formal", lambda: self.rewrite("formal"), Label="Formal",
+                      HelpText="Rewrite the selected text in a formal, professional tone")
+            self._add("Button", "voice", lambda: self.rewrite("voice"), Label="My voice",
+                      HelpText="Rewrite the selected text the way you write, learned from your writing samples")
         self.quick = []
         for i, (label, prompt, needs) in enumerate(claude_actions.QUICK_ACTIONS.get(self.kind, [])):
-            self._add("Button", "quick%d" % i, (lambda p=prompt, l=label: self.ask({"instruction": p}, l)), Label=label)
+            self._add("Button", "quick%d" % i, (lambda p=prompt, l=label: self.ask({"instruction": p}, l)), Label=label,
+                      HelpText=claude_actions.QUICK_HINTS.get(label, ""))
             self.quick.append((i, needs))
-        self._add("Edit", "prompt", MultiLine=True, VScroll=True, AutoVScroll=True)
+        self._add("Edit", "prompt", MultiLine=True, VScroll=True, AutoVScroll=True,
+                  HelpText="Ask a question about the document or describe a change for Claude to make")
         settings = claude_api.load_settings(self.server.settings_path)
         models = [label for _, label in MODEL_CHOICES]
         m_index = next((i for i, (mid, _) in enumerate(MODEL_CHOICES) if mid == (settings.get("model") or "")), 0)
         self._add("ListBox", "model", self._model_changed, Dropdown=True, StringItemList=tuple(models),
-                  SelectedItems=(m_index,))
+                  SelectedItems=(m_index,), HelpText="Which Claude model answers. Bigger models are more careful, smaller ones faster")
         e_index = next((i for i, (eid, _) in enumerate(EFFORT_CHOICES) if eid == settings.get("effort")), 1)
         self._add("ListBox", "effort", self._effort_changed, Dropdown=True,
-                  StringItemList=tuple(l for _, l in EFFORT_CHOICES), SelectedItems=(e_index,))
+                  StringItemList=tuple(l for _, l in EFFORT_CHOICES), SelectedItems=(e_index,),
+                  HelpText="How long Claude thinks before answering. Higher is more thorough but slower")
         if writer:
             self._add("CheckBox", "track", self._track_changed, Label="Tracked",
-                      State=1 if settings.get("track_changes") else 0)
-        self._add("Button", "ask", self._ask_or_stop, Label="Ask", DefaultButton=True)
+                      State=1 if settings.get("track_changes") else 0,
+                      HelpText=TRACKED_HINT)
+        self._add("Button", "ask", self._ask_or_stop, Label="Ask", DefaultButton=True,
+                  HelpText="Send your request to Claude")
         self._add("FixedText", "status", Label="", MultiLine=True)
         self._add("Edit", "reply", MultiLine=True, VScroll=True, ReadOnly=True, Text="")
         first, second = ("Write at selection", "Write below") if self.kind == claude_office.CALC else \
                         ("Replace selection", "Insert below")
         if self.kind in claude_office.WRITABLE:     # Impress/Draw replies are copied, not written in
-            self._add("Button", "replace", lambda: self.apply("replace"), Label=first, Enabled=False)
-            self._add("Button", "insert", lambda: self.apply("after"), Label=second, Enabled=False)
-        self._add("Button", "copy", self.copy, Label="Copy", Enabled=False)
-        self._add("Button", "full", self.open_full, Label="Open full panel")
+            self._add("Button", "replace", lambda: self.apply("replace"), Label=first, Enabled=False,
+                      HelpText="Put Claude's reply in place of the selection")
+            self._add("Button", "insert", lambda: self.apply("after"), Label=second, Enabled=False,
+                      HelpText="Add Claude's reply after the selection, leaving it as it is")
+        self._add("Button", "copy", self.copy, Label="Copy", Enabled=False,
+                  HelpText="Copy Claude's reply to the clipboard")
+        self._add("Button", "full", self.open_full, Label="Open full panel",
+                  HelpText="Open the complete Claude panel in its own window")
         self._effort_enabled()
 
     # -------------------------------------------------------- layout

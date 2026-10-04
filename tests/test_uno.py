@@ -393,6 +393,10 @@ class UnoTest(unittest.TestCase):
         self.assertEqual(state["connection"], "api")
         quick = {q["label"]: q for q in state["quick"]}
         self.assertTrue(quick["Fix grammar"]["needs_selection"])
+        for kind_actions in claude_actions.QUICK_ACTIONS.values():   # every chip explains itself on hover
+            for label, _, _ in kind_actions:
+                self.assertTrue(claude_actions.QUICK_HINTS.get(label), label)
+        self.assertTrue(quick["Fix grammar"]["hint"])
         self.assertFalse(quick["Summarize"]["needs_selection"])
         self.assertNotIn("More formal", quick)          # the "Rewrite as" toggle does that now
         self.assertEqual(state["voice"], {"ready": False, "default": False, "samples": 0})

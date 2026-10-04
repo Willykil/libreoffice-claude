@@ -436,3 +436,22 @@ ins.d { text-decoration: none; background: var(--ins-bg); color: var(--ins-text)
 .card-actions .btn.quiet { padding: 0 6px; }
 .card-actions .spacer { flex: 1 1 0; min-width: 0; }
 .card-actions .status-note { flex: 0 1 auto; }
+
+/* Hover help, drawn by app.js because the embedded window shows no native tooltips. */
+.tip {
+  position: fixed;
+  z-index: 100;
+  max-width: min(280px, calc(100vw - 12px));
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .12s;
+}
+.tip.show { opacity: 1; visibility: visible; }

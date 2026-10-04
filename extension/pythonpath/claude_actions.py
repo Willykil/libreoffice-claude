@@ -56,6 +56,23 @@ QUICK_ACTIONS = {
     ],
 }
 
+# What each quick action does, shown when the pointer rests on it.
+QUICK_HINTS = {
+    "Improve": "Polish the selected text: clearer, smoother, fewer mistakes, same meaning and length.",
+    "Fix grammar": "Correct spelling, grammar and punctuation in the selection. Nothing else changes.",
+    "Make shorter": "Cut the selected text down while keeping its key points.",
+    "Simplify": "Rewrite the selection in plainer words that are easier to read.",
+    "Translate FR \u2194 EN": "Translate the selection: French becomes English, anything else becomes French.",
+    "Summarize": "Sum up the selection, or the whole file when nothing is selected.",
+    "Explain": "Explain the selection, or the whole file: what it says, or what the data and formulas do.",
+    "Find errors": "Check the data and formulas for mistakes, inconsistencies and outliers, with cell references.",
+    "Add totals": "Add a totals row under the selected numbers, as formulas.",
+    "Clean up": "Tidy the selected cells: spaces, capitalization, date and number formats, typos.",
+    "Proofread": "List spelling, grammar and wording problems with a suggested fix for each.",
+    "Review deck": "Coaching on the presentation: structure, flow, crowded or unclear slides.",
+    "Speaker notes": "Write a few spoken sentences to say over the current slide.",
+}
+
 
 def settings_path(ctx):
     import uno

@@ -41,13 +41,13 @@
         <span>Claude</span>
       </div>
       <div class="top-actions">
-        <button class="icon-btn" id="openHistory" type="button" title="Past conversations" aria-label="Past conversations"><svg><use href="#i-history"/></svg></button>
-        <button class="icon-btn" id="newChat" type="button" title="New conversation" aria-label="New conversation"><svg><use href="#i-new"/></svg></button>
-        <button class="icon-btn" id="openSettings" type="button" title="Settings" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
+        <button class="icon-btn" id="openHistory" type="button" title="Past conversations: reopen or delete an earlier chat" aria-label="Past conversations"><svg><use href="#i-history"/></svg></button>
+        <button class="icon-btn" id="newChat" type="button" title="Start a new conversation. This one stays in Past conversations." aria-label="New conversation"><svg><use href="#i-new"/></svg></button>
+        <button class="icon-btn" id="openSettings" type="button" title="Settings: how to connect, standing instructions, your writing voice" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
       </div>
     </header>
 
-    <div class="context" id="context">
+    <div class="context" id="context" title="What Claude looks at: this file and what you have selected in it">
       <svg class="context-icon" id="contextIcon"><use href="#i-doc"/></svg>
       <div class="context-text">
         <div class="context-title" id="docTitle">Looking for your document…</div>
@@ -66,36 +66,36 @@
     <footer class="composer">
       <div class="actions-row" id="actionsRow">
         <div class="tone" id="tone" role="group" aria-label="Rewrite as" hidden>
-          <span class="tone-label">Rewrite as</span>
+          <span class="tone-label" title="Rewrite the selected text in another style">Rewrite as</span>
           <button type="button" class="tone-btn" data-tone="formal">Formal</button>
           <button type="button" class="tone-btn" data-tone="voice"><svg><use href="#i-voice"/></svg>My voice</button>
         </div>
         <div class="chips" id="chips" role="toolbar" aria-label="Quick actions"></div>
       </div>
       <form class="input" id="askForm">
-        <textarea id="prompt" rows="1" placeholder="Ask Claude…" aria-label="Message"></textarea>
+        <textarea id="prompt" rows="1" placeholder="Ask Claude…" aria-label="Message" title="Ask about the file or describe a change. Enter sends, Shift+Enter starts a new line."></textarea>
         <div class="input-bar">
-          <button type="button" class="selector" id="selector" aria-haspopup="dialog" aria-expanded="false">
+          <button type="button" class="selector" id="selector" title="Choose the Claude model and how long it thinks (effort)" aria-haspopup="dialog" aria-expanded="false">
             <svg class="spark"><use href="#i-sparkle"/></svg><span id="selectorLabel">Default</span><svg class="chev"><use href="#i-chev"/></svg>
           </button>
-          <button type="button" class="tag" id="trackedTag" title="Claude's edits go in as tracked changes. Click to turn off." hidden>
+          <button type="button" class="tag" id="trackedTag" title="Tracked changes are on: Claude&#39;s edits show up as suggestions you accept or reject one by one in Writer (Edit &gt; Track Changes &gt; Manage). Click to turn off." hidden>
             <svg><use href="#i-track"/></svg>Tracked
           </button>
           <span class="spacer"></span>
-          <button class="send" id="send" type="submit" aria-label="Send" disabled><svg><use href="#i-send"/></svg></button>
+          <button class="send" id="send" type="submit" aria-label="Send" title="Send (Enter)" disabled><svg><use href="#i-send"/></svg></button>
         </div>
       </form>
-      <div class="footnote" id="connection"></div>
+      <div class="footnote" id="connection" title="How this panel reaches Claude. Change it in Settings."></div>
 
       <div class="popover" id="popover" role="dialog" aria-label="Model and effort" hidden>
-        <div class="pop-label">Model</div>
+        <div class="pop-label" title="Bigger models are more careful, smaller ones are faster">Model</div>
         <div id="modelList" role="radiogroup" aria-label="Model"></div>
         <div class="pop-sep"></div>
         <div class="pop-label" id="effortLabel">Effort</div>
         <div class="effort" id="effortList" role="radiogroup" aria-labelledby="effortLabel"></div>
         <div id="trackRow">
           <div class="pop-sep"></div>
-          <label class="switch-row">
+          <label class="switch-row" title="On: Claude&#39;s edits show up as tracked changes you accept or reject in Writer. Off: they are made directly, and Undo still reverts them.">
             <span class="switch-text"><span class="switch-title">Edits as tracked changes</span><span class="switch-sub">Accept or reject them in Writer</span></span>
             <input type="checkbox" id="trackSwitch" class="switch">
           </label>
@@ -115,59 +115,59 @@
       <fieldset>
         <legend>Connect with</legend>
         <div class="segmented" role="radiogroup">
-          <label><input type="radio" name="backend" value="claude_code"><span>Claude subscription</span></label>
-          <label><input type="radio" name="backend" value="api"><span>API key</span></label>
+          <label title="Use Claude Code on this computer, signed in with your Claude plan"><input type="radio" name="backend" value="claude_code"><span>Claude subscription</span></label>
+          <label title="Use an Anthropic API key, billed per request"><input type="radio" name="backend" value="api"><span>API key</span></label>
         </div>
         <p class="hint" data-show="claude_code">Uses Claude Code on this computer, signed in with your Claude account. No extra cost beyond your plan.</p>
         <p class="hint" data-show="api">Billed per use to an Anthropic API key from console.anthropic.com.</p>
       </fieldset>
 
       <label class="field" data-show="api">
-        <span>API key</span>
+        <span title="Your key from console.anthropic.com. It is stored on this computer only.">API key</span>
         <input type="password" name="api_key" autocomplete="off" spellcheck="false">
-        <button class="link" type="button" id="clearKey" hidden>Remove saved key</button>
+        <button class="link" type="button" id="clearKey" title="Forget the API key saved on this computer" hidden>Remove saved key</button>
       </label>
 
-      <button class="nav-row" type="button" id="openVoiceFromSettings">
+      <button class="nav-row" type="button" id="openVoiceFromSettings" title="Teach Claude your writing style from samples, for the My voice rewrite">
         <svg class="nav-icon"><use href="#i-voice"/></svg>
         <span class="nav-text"><span class="nav-title">Your writing voice</span><span class="nav-sub" id="voiceStatusLine">Not set up yet</span></span>
         <svg class="nav-chev"><use href="#i-next"/></svg>
       </button>
 
       <label class="field">
-        <span>Always tell Claude in Writer</span>
+        <span title="Added to every request you make in Writer">Always tell Claude in Writer</span>
         <textarea name="instructions_writer" rows="3" placeholder="e.g. Write in Canadian French. Use a formal tone."></textarea>
       </label>
 
       <label class="field">
-        <span>Always tell Claude in Calc</span>
+        <span title="Added to every request you make in Calc">Always tell Claude in Calc</span>
         <textarea name="instructions_calc" rows="3" placeholder="e.g. Format numbers with thousand separators."></textarea>
       </label>
 
       <label class="field">
-        <span>Always tell Claude in Impress</span>
+        <span title="Added to every request you make in Impress">Always tell Claude in Impress</span>
         <textarea name="instructions_impress" rows="3" placeholder="e.g. Keep slides to five bullets at most."></textarea>
       </label>
 
       <label class="field">
-        <span>Always tell Claude in Draw</span>
+        <span title="Added to every request you make in Draw">Always tell Claude in Draw</span>
         <textarea name="instructions_draw" rows="3" placeholder="e.g. Labels are in English."></textarea>
       </label>
 
       <div class="field">
         <span>Chat history</span>
         <p class="hint">Past conversations are kept on this computer only.</p>
-        <button class="btn" type="button" id="clearHistory"><svg><use href="#i-trash"/></svg>Clear chat history</button>
+        <button class="btn" type="button" id="clearHistory" title="Delete every saved conversation from this computer"><svg><use href="#i-trash"/></svg>Clear chat history</button>
       </div>
 
       <details class="advanced">
         <summary>Advanced</summary>
         <label class="field" data-show="claude_code">
-          <span>Claude Code location</span>
+          <span title="Full path to the claude program. Leave empty unless it isn&#39;t found automatically.">Claude Code location</span>
           <input type="text" name="claude_path" placeholder="Found automatically" spellcheck="false">
         </label>
         <label class="field" data-show="api">
-          <span>Max reply length (tokens)</span>
+          <span title="The longest reply Claude may write. Higher allows longer answers and costs more. A token is about three quarters of a word.">Max reply length (tokens)</span>
           <input type="number" name="max_tokens" min="256" max="128000" step="256">
         </label>
         <label class="switch-row" id="nativeSidebarRow" hidden>
@@ -207,20 +207,20 @@
         <div class="samples">
           <div id="sampleList"></div>
           <div class="samples-add">
-            <button class="btn" type="button" id="addSelection">Add current selection</button>
-            <button class="btn" type="button" id="addDocument">Add this document</button>
-            <button class="btn" type="button" id="addFiles">Add files…</button>
+            <button class="btn" type="button" id="addSelection" title="Use the text selected in the document as a sample of your writing">Add current selection</button>
+            <button class="btn" type="button" id="addDocument" title="Use the whole open document as a sample of your writing">Add this document</button>
+            <button class="btn" type="button" id="addFiles" title="Pick documents on your computer to use as samples">Add files…</button>
             <input type="file" id="fileInput" accept=".odt,.docx,.doc,.rtf,.txt,.md,.fodt,.ott,.dotx" multiple hidden>
           </div>
         </div>
       </section>
 
       <section class="voice-section">
-        <div class="section-head"><span class="section-label">What Claude noticed</span><button class="link" type="button" id="learnVoice">Learn my style</button></div>
+        <div class="section-head"><span class="section-label">What Claude noticed</span><button class="link" type="button" id="learnVoice" title="Have Claude read your samples and describe your style below">Learn my style</button></div>
         <textarea class="profile" id="profile" rows="7" placeholder="After you add samples and press Learn my style, Claude describes how you write here. You can edit it."></textarea>
       </section>
 
-      <label class="switch-row card-row">
+      <label class="switch-row card-row" title="On: what you type in Writer is written in your style, without picking My voice each time">
         <span class="switch-text"><span class="switch-title">Use my voice by default</span><span class="switch-sub">Requests you type in Writer are written in your voice</span></span>
         <input type="checkbox" id="voiceDefault" class="switch">
       </label>
@@ -228,7 +228,7 @@
       <p class="hint">Samples and what Claude noticed stay on this computer. They're sent to Claude only with requests that use My voice, or when you press Learn my style, through your Claude connection.</p>
 
       <div class="sheet-actions">
-        <button class="btn primary" type="button" id="voiceDone">Done</button>
+        <button class="btn primary" type="button" id="voiceDone" title="Save and go back">Done</button>
       </div>
     </div>
   </aside>
