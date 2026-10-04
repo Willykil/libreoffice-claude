@@ -199,6 +199,13 @@ class UnoTest(unittest.TestCase):
             self.assertEqual(merging.getByName(name).getPropertyValue("MergeToolBar"), "standardbar")
         self.assertIn("com.sun.star.presentation.PresentationDocument", menu.getPropertyValue("Context"))
 
+    def test_sidebar_can_go_wide(self):
+        cp = self.ctx.ServiceManager.createInstanceWithContext(
+            "com.sun.star.configuration.ConfigurationProvider", self.ctx)
+        node = cp.createInstanceWithArguments("com.sun.star.configuration.ConfigurationAccess",
+                                              (_prop("nodepath", "/org.openoffice.Office.UI.Sidebar/General"),))
+        self.assertGreaterEqual(node.MaximumWidth, 1000)    # LibreOffice's own cap is 500
+
     def test_settings_path_in_profile(self):
         path = claude_actions.settings_path(self.ctx)
         self.assertTrue(path.startswith(os.path.join(self.tmp, "profile")), path)
@@ -230,7 +237,7 @@ class UnoTest(unittest.TestCase):
                                           (_prop("Frame", frame), _prop("ParentWindow", frame.getContainerWindow())))
         self.assertEqual(element.Type, 7)
         panel = element.getRealInterface()
-        self.assertEqual(panel.getMinimalWidth(), 280)
+        self.assertEqual(panel.getMinimalWidth(), 400)
         self.assertEqual(panel.getHeightForWidth(300).Minimum, 420)
         self.assertIsNotNone(panel.Window)
 

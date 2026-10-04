@@ -31,6 +31,7 @@ import claude_panel
 TOOLPANEL = 7                       # com.sun.star.ui.UIElementType.TOOLPANEL
 POSSIZE = 15                        # com.sun.star.awt.PosSize.POSSIZE
 DECK_COMMAND = ".uno:SidebarDeck.ClaudeDeck"
+MIN_WIDTH = 400                     # px the sidebar opens at; the user can drag it wider
 
 _panels = []                        # open SidebarPanels, so menu actions reach the right one
 _panels_lock = threading.Lock()
@@ -124,7 +125,8 @@ class SidebarPanel(unohelper.Base, XToolPanel, XSidebarPanel, XWindowListener, X
         return uno.createUnoStruct("com.sun.star.ui.LayoutSize", 420, -1, 700)
 
     def getMinimalWidth(self):
-        return 280
+        # LibreOffice widens the sidebar to this when the Claude tab opens, so it never starts squished.
+        return MIN_WIDTH
 
     # XWindowListener
     def windowResized(self, event):

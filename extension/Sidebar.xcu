@@ -2,6 +2,10 @@
 <!-- The Claude tab in LibreOffice's sidebar (the icon strip on the right), in Writer, Calc, Impress and Draw. -->
 <oor:component-data xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema"
                     oor:name="Sidebar" oor:package="org.openoffice.Office.UI">
+  <!-- LibreOffice caps the sidebar at 500 px by default; let the Claude panel be dragged wider. -->
+  <node oor:name="General">
+    <prop oor:name="MaximumWidth" oor:op="fuse"><value>1400</value></prop>
+  </node>
   <node oor:name="Content">
     <node oor:name="DeckList">
       <node oor:name="ClaudeDeck" oor:op="replace">
