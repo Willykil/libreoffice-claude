@@ -905,7 +905,12 @@ document.addEventListener("keydown", (e) => {
 
 (async () => {
   await poll();
-  setInterval(poll, 1500);
+  // Next check only after this one answered, so checks never pile up on a busy LibreOffice.
+  (async function loop() {
+    await new Promise((r) => setTimeout(r, 1500));
+    await poll();
+    loop();
+  })();
   window.addEventListener("focus", poll);
   if (firstRun) handleRun(firstRun);
   promptBox.focus();

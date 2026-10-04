@@ -53,6 +53,8 @@ class PanelServer:
         self._last_doc = None
         self._request = None            # (cancel Event) while a request runs
         self._lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._last_state = None
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), _handler(self))
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
@@ -100,6 +102,16 @@ class PanelServer:
 
     def state(self):
         self.last_seen = time.time()
+        # One at a time: a slow read must not stack up behind the next poll.
+        if not self._state_lock.acquire(blocking=False):
+            return dict(self._last_state or {}, pending=None)
+        try:
+            self._last_state = self._state()
+            return self._last_state
+        finally:
+            self._state_lock.release()
+
+    def _state(self):
         pending, self.pending = self.pending, None
         settings = claude_api.load_settings(self.settings_path)
         model = settings.get("model") or ""
@@ -117,13 +129,15 @@ class PanelServer:
         out["voice"] = {"ready": voice["ready"], "default": voice["default"], "samples": len(voice["samples"])}
         doc = self.document()
         if doc is not None:
+            # Polled every couple of seconds while LibreOffice is in use, so only cheap reads here:
+            # reading the whole document each time froze LibreOffice on long documents.
+            kind = claude_office.doc_kind(doc)
             try:
-                ctx = claude_office.get_context(doc)
-                out["doc"] = {"kind": ctx.kind, "title": self._title(doc), "label": ctx.label,
-                              "has_selection": ctx.has_selection}
-            except claude_office.OfficeError as e:
-                out["doc"] = {"kind": claude_office.doc_kind(doc), "title": self._title(doc),
-                              "label": str(e), "has_selection": False}
+                label, has_selection = claude_office.selection_summary(doc)
+            except Exception:
+                label, has_selection = "", False
+            out["doc"] = {"kind": kind, "title": self._title(doc), "label": label,
+                          "has_selection": has_selection}
             out["doc"]["writable"] = out["doc"]["kind"] in claude_office.WRITABLE
             out["quick"] = [{"label": l, "prompt": p, "needs_selection": n}
                             for l, p, n in claude_actions.QUICK_ACTIONS[out["doc"]["kind"]]]

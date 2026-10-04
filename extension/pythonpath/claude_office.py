@@ -20,6 +20,7 @@ WRITABLE = (WRITER, CALC)
 # instead of silently truncating.
 MAX_CELLS = 50000
 MAX_DOC_CHARS = 2000000
+MAX_CHANGES = 500       # tracked insertions/deletions listed for Claude
 
 SYSTEM_BASE = ("You are Claude, an AI assistant built into LibreOffice {app}. "
                "Your reply may be inserted straight into the user's {doc}, so reply with only "
@@ -170,7 +171,11 @@ def selection_summary(doc):
         words = len(selected_text(doc).split())
         if words:
             return "Selection: %d word%s" % (words, "" if words == 1 else "s"), True
-        return "No selection - Claude reads the whole document", False
+        try:
+            count = " (%d words)" % doc.getPropertyValue("WordCount")    # Writer keeps this up to date
+        except Exception:
+            count = ""
+        return "No selection - Claude reads the whole document%s" % count, False
     if kind == CALC:
         try:
             a = _calc_selection_address(doc)
@@ -179,7 +184,11 @@ def selection_summary(doc):
         ref = _ref(a.StartColumn, a.StartRow, a.EndColumn, a.EndRow)
         if a.StartColumn == a.EndColumn and a.StartRow == a.EndRow:
             return "Cell %s - Claude reads the whole workbook" % ref, False
-        return "Selection: %s" % ref, True
+        cells = (a.EndColumn - a.StartColumn + 1) * (a.EndRow - a.StartRow + 1)
+        if cells > MAX_CELLS:
+            return ("That's %d cells - too many to send. Select a smaller range (up to %d cells)."
+                    % (cells, MAX_CELLS)), False
+        return "Selection: %s (%d cells)" % (ref, cells), True
     if kind in (IMPRESS, DRAW):
         return _slides_label(doc, kind)
     return "Open a document, spreadsheet or presentation.", False
@@ -250,12 +259,18 @@ def writer_review_notes(doc):
                 comments.append("- %s%s: %s" % (f.Author or "Someone", on, f.Content))
     except Exception:
         pass
-    changes = []
+    changes, formatting = [], 0
     try:
         redlines = doc.getRedlines().createEnumeration()
         while redlines.hasMoreElements():
             r = redlines.nextElement()
             kind = r.getPropertyValue("RedlineType")
+            if kind in ("Format", "ParagraphFormat", "Attributes"):
+                formatting += 1     # often hundreds (highlighting a whole document); just count them
+                continue
+            if len(changes) >= MAX_CHANGES:
+                changes.append("- (more changes not listed)")
+                break
             start, end = r.getPropertyValue("RedlineStart"), r.getPropertyValue("RedlineEnd")
             try:
                 cur = start.getText().createTextCursorByRange(start)
@@ -271,6 +286,8 @@ def writer_review_notes(doc):
     parts = []
     if comments:
         parts.append("Comments in the document:\n" + "\n".join(comments))
+    if formatting:
+        changes.append("- %d formatting change%s" % (formatting, "" if formatting == 1 else "s"))
     if changes:
         parts.append("Tracked changes in the document (the text above still shows them):\n"
                      + "\n".join(changes))
@@ -533,6 +550,7 @@ def apply_result(doc, text, mode, track_changes=False):
         raise OfficeError("Claude can't write into %ss yet; copy the reply instead." % _page_word(kind))
     undo = doc.getUndoManager()
     undo.enterUndoContext("Claude")
+    doc.lockControllers()
     try:
         if kind == WRITER:
             previous = doc.getPropertyValue("RecordChanges")
@@ -544,6 +562,7 @@ def apply_result(doc, text, mode, track_changes=False):
         elif kind == CALC:
             _calc_apply(doc, text, mode)
     finally:
+        doc.unlockControllers()
         undo.leaveUndoContext()
 
 

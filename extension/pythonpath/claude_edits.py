@@ -237,6 +237,7 @@ def apply(doc, ops, track_changes=False, paragraphs=None):
     done, failed = [], []
     undo = doc.getUndoManager()
     undo.enterUndoContext(UNDO_TITLE)
+    doc.lockControllers()          # redraw once at the end, not after every edit
     try:
         if kind == claude_office.WRITER:
             previous = doc.getPropertyValue("RecordChanges")
@@ -252,6 +253,7 @@ def apply(doc, ops, track_changes=False, paragraphs=None):
             for op in ops:
                 _run(calc, op, done, failed)
     finally:
+        doc.unlockControllers()
         undo.leaveUndoContext()
     if not done:
         # Nothing changed: don't leave an empty "Claude edits" step on the undo stack.
@@ -384,10 +386,22 @@ class _Writer:
         desc.SearchString = needle
         desc.SearchRegularExpression = regex
         desc.SearchCaseSensitive = case
-        found = self.doc.findAll(desc)
-        hits = [found.getByIndex(i) for i in range(found.getCount())]
-        if scope is not None:
-            hits = [h for h in hits if any(self._inside(h, el) for el in scope)]
+        if scope is None or any(self._is_table(el) for el in scope):
+            found = self.doc.findAll(desc)
+            hits = [found.getByIndex(i) for i in range(found.getCount())]
+            if scope is not None:
+                hits = [h for h in hits if any(self._inside(h, el) for el in scope)]
+            return hits
+        # Search just the paragraphs asked for, not the whole document each time.
+        hits = []
+        for el in scope:
+            start = el.getStart()
+            while True:
+                hit = self.doc.findNext(start, desc)
+                if hit is None or not self._inside(hit, el):
+                    break
+                hits.append(hit)
+                start = hit.getEnd()
         return hits
 
     def _find(self, needle, scope):
