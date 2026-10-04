@@ -239,10 +239,10 @@ class UnoTest(unittest.TestCase):
         self.assertEqual(claude_office.selection_summary(doc), ("Selection: 4 words", True))
         doc.getCurrentController().select(doc.getText().getStart())
         self.assertEqual(claude_office.selection_summary(doc),
-                         ("No selection - Claude reads the whole document", False))
+                         ("No selection - Claude reads the whole document (7 words)", False))
         doc, sheet = self.calc_with_data()
         doc.getCurrentController().select(sheet.getCellRangeByName("A1:B3"))
-        self.assertEqual(claude_office.selection_summary(doc), ("Selection: A1:B3", True))
+        self.assertEqual(claude_office.selection_summary(doc), ("Selection: A1:B3 (6 cells)", True))
         doc.getCurrentController().select(sheet.getCellRangeByName("D2"))
         self.assertEqual(claude_office.selection_summary(doc), ("Cell D2 - Claude reads the whole workbook", False))
 
@@ -381,7 +381,7 @@ class UnoTest(unittest.TestCase):
         self.writer_with_selection()
         state = self.api("/api/state")
         self.assertEqual(state["doc"]["kind"], "writer")
-        self.assertEqual(state["doc"]["label"], "Selection: 4 words in \u00b62")
+        self.assertEqual(state["doc"]["label"], "Selection: 4 words")
         self.assertTrue(state["doc"]["has_selection"])
         self.assertEqual(state["connection"], "api")
         quick = {q["label"]: q for q in state["quick"]}
