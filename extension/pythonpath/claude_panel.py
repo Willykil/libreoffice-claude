@@ -139,7 +139,8 @@ class PanelServer:
             out["doc"] = {"kind": kind, "title": self._title(doc), "label": label,
                           "has_selection": has_selection}
             out["doc"]["writable"] = out["doc"]["kind"] in claude_office.WRITABLE
-            out["quick"] = [{"label": l, "prompt": p, "needs_selection": n}
+            out["quick"] = [{"label": l, "prompt": p, "needs_selection": n,
+                             "hint": claude_actions.QUICK_HINTS.get(l, "")}
                             for l, p, n in claude_actions.QUICK_ACTIONS[out["doc"]["kind"]]]
         return out
 

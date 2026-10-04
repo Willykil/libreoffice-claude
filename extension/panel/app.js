@@ -25,6 +25,17 @@ const MODEL_INFO = {
   "claude-fable-5-1": ["Fable 5.1", "Most capable, for the hardest tasks"],
 };
 const EFFORT_SHORT = { low: "Low", medium: "Medium", high: "High", xhigh: "Extra", max: "Max" };
+const EFFORT_TIPS = {
+  low: "Low: quick answers with little thinking",
+  medium: "Medium: a balance of speed and care",
+  high: "High: thinks longer, for harder requests",
+  xhigh: "Extra high: thinks even longer",
+  max: "Max: as much thinking as it takes, slowest",
+};
+const TONE_TIPS = {
+  formal: "Rewrite the selected text in a formal, professional tone",
+  voice: "Rewrite the selected text the way you write, learned from your writing samples",
+};
 
 let state = { doc: null, quick: [], connection: "subscription", models: [], efforts: [], voice: {} };
 let busy = false;
@@ -62,11 +73,12 @@ function icon(name, cls) {
   return svg;
 }
 
-function button(label, cls, iconName, onClick) {
+function button(label, cls, iconName, onClick, tip) {
   const b = el("button", "btn " + (cls || ""));
   b.type = "button";
   if (iconName) b.appendChild(icon(iconName));
   if (label) b.appendChild(document.createTextNode(label));
+  if (tip) b.title = tip;
   b.addEventListener("click", onClick);
   return b;
 }
@@ -123,7 +135,7 @@ function renderState() {
   const voice = state.voice || {};
   for (const b of document.querySelectorAll(".tone-btn")) {
     b.disabled = busy || !hasSelection();
-    b.title = hasSelection() ? "" : "Select the text to rewrite first";
+    b.title = hasSelection() ? TONE_TIPS[b.dataset.tone] : "Select the text to rewrite first";
     b.classList.toggle("default", b.dataset.tone === "voice" && !!voice.default && !!voice.ready);
   }
 
@@ -141,7 +153,7 @@ function renderState() {
       const c = el("button", "chip", q.label);
       c.type = "button";
       c.disabled = busy || (q.needs_selection && !hasSelection());
-      if (q.needs_selection && !hasSelection()) c.title = "Select some text first";
+      c.title = q.needs_selection && !hasSelection() ? "Select some text first" : (q.hint || "");
       c.addEventListener("click", () => ask({ instruction: q.prompt }, q.label));
       return c;
     }));
@@ -198,7 +210,7 @@ function renderPopover() {
   eff.replaceChildren(...state.efforts.map((e) => {
     const b = el("button", "", EFFORT_SHORT[e.id] || e.label);
     b.type = "button";
-    b.title = e.label;
+    b.title = EFFORT_TIPS[e.id] || e.label;
     b.setAttribute("role", "radio");
     b.setAttribute("aria-checked", String(state.effort === e.id));
     b.addEventListener("click", () => saveSetting({ effort: e.id }));
@@ -317,7 +329,7 @@ function renderGrid(rows) {
 }
 
 function copyButton(text) {
-  return iconButton("copy", "Copy", async () => {
+  return iconButton("copy", "Copy to the clipboard", async () => {
     try { await navigator.clipboard.writeText(text); toast("Copied"); } catch (e) { toast("Couldn't copy", true); }
   });
 }
@@ -343,8 +355,10 @@ function addAnswerCard(res) {
   if (res.truncated) c.body.appendChild(el("p", "card-note", "The reply was cut off at the length limit."));
   if (canWrite(res.kind)) {
     const replace = button(res.selection ? "Replace selection" : "Insert at cursor", "primary", null,
-      () => apply(res.text, "replace", replace, c.card));
-    const below = button("Insert below", "", null, () => apply(res.text, "after", below, c.card));
+      () => apply(res.text, "replace", replace, c.card),
+      res.selection ? "Put this reply in place of the selected text" : "Put this reply where the cursor is");
+    const below = button("Insert below", "", null, () => apply(res.text, "after", below, c.card),
+      "Add this reply as a new paragraph after the selection");
     c.actions.append(replace, below);
   }
   c.actions.append(el("span", "spacer"), copyButton(res.text));
@@ -383,7 +397,7 @@ function addEditsCard(res) {
       if (r.error) return toast(r.error, true);
       c.card.classList.add("rejected");
       c.actions.replaceChildren(el("span", "status-note", "Undone — the document is back as it was"));
-    });
+    }, "Undo every edit from this reply at once");
     c.actions.append(undo, note);
   } else {
     c.actions.remove();
@@ -415,6 +429,8 @@ function addRewriteCard(res, proposed, segs, sim) {
   }
   const toggle = el("div", "toggle");
   const tChanges = el("button", "", "Changes"), tPreview = el("button", "", "Preview");
+  tChanges.title = "Show what changed: removed text struck out, new text highlighted";
+  tPreview.title = "Show the rewritten text as it would read in the document";
   for (const b of [tChanges, tPreview]) { b.type = "button"; toggle.appendChild(b); }
   c.top.appendChild(toggle);
   const where = res.paragraph ? "Replace ¶" + res.paragraph + " text" : "Replace selection";
@@ -444,7 +460,8 @@ function addRewriteCard(res, proposed, segs, sim) {
   function oneByOne() {
     const list = el("div", "hunks");
     const result = el("div");
-    const apply3 = button("Apply", "primary", "check", () => apply(D.compose(segs, accepted), "replace", apply3, c.card));
+    const apply3 = button("Apply", "primary", "check", () => apply(D.compose(segs, accepted), "replace", apply3, c.card),
+      "Put the changes you kept into the document");
     function refresh() {
       const n = accepted.filter(Boolean).length;
       apply3.lastChild.textContent = n === changes.length ? "Apply all changes" : "Apply " + n + " change" + (n === 1 ? "" : "s");
@@ -467,6 +484,8 @@ function addRewriteCard(res, proposed, segs, sim) {
       yes.type = no.type = "button";
       yes.setAttribute("aria-label", "Keep this change");
       no.setAttribute("aria-label", "Skip this change");
+      yes.title = "Keep this change";
+      no.title = "Skip this change and keep your original wording";
       yes.appendChild(icon("check"));
       no.appendChild(icon("x"));
       const sync = () => {
@@ -483,8 +502,10 @@ function addRewriteCard(res, proposed, segs, sim) {
     c.title.textContent = "Review changes";
     toggle.hidden = true;
     c.body.replaceChildren(list, el("div", "result-label", "Result"), result);
-    c.actions.replaceChildren(apply3, button("Accept all", "", null, () => { accepted = accepted.map(() => true); oneByOne(); }),
-      el("span", "spacer"), button("Back", "quiet", null, () => { toggle.hidden = false; render(); }));
+    c.actions.replaceChildren(apply3, button("Accept all", "", null, () => { accepted = accepted.map(() => true); oneByOne(); },
+      "Keep every change"),
+      el("span", "spacer"), button("Back", "quiet", null, () => { toggle.hidden = false; render(); },
+      "Back to the full suggestion"));
     refresh();
   }
 
@@ -495,22 +516,26 @@ function addRewriteCard(res, proposed, segs, sim) {
     if (view === "changes") {
       c.title.textContent = changes.length === 1 ? "1 change" : changes.length + " changes";
       c.body.replaceChildren(diffView());
-      const accept = button("Accept all", "primary", "check", () => apply(proposed, "replace", accept, c.card));
+      const accept = button("Accept all", "primary", "check", () => apply(proposed, "replace", accept, c.card),
+        "Put the rewritten text into the document");
       const reject = button("Reject", "", null, () => {
         c.card.classList.add("rejected");
         c.actions.replaceChildren(el("span", "status-note", "Rejected — nothing was changed"), el("span", "spacer"),
-          button("Undo", "quiet", null, render));
-      });
+          button("Undo", "quiet", null, render, "Bring the suggestion back"));
+      }, "Keep your original text and dismiss the suggestion");
       c.actions.replaceChildren(accept, reject, el("span", "spacer"));
-      if (changes.length > 1) c.actions.appendChild(button("One by one", "quiet", null, oneByOne));
+      if (changes.length > 1) c.actions.appendChild(button("One by one", "quiet", null, oneByOne,
+        "Go through the changes and choose which to keep"));
     } else {
       c.title.textContent = "Rewritten";
       c.body.replaceChildren(paper(proposed));
-      const replace = button(where, "primary", null, () => apply(proposed, "replace", replace, c.card));
-      const below = button("Insert below", "", null, () => apply(proposed, "after", below, c.card));
+      const replace = button(where, "primary", null, () => apply(proposed, "replace", replace, c.card),
+        "Put the rewritten text in place of the original");
+      const below = button("Insert below", "", null, () => apply(proposed, "after", below, c.card),
+        "Add the rewritten text after the original, keeping both");
       c.actions.replaceChildren(replace, below, el("span", "spacer"));
-      if (res.tone === "voice") c.actions.appendChild(button("Try Formal", "quiet", null, () => rewrite("formal")));
-      if (res.tone === "formal") c.actions.appendChild(button("Try My voice", "quiet", null, () => rewrite("voice")));
+      if (res.tone === "voice") c.actions.appendChild(button("Try Formal", "quiet", null, () => rewrite("formal"), TONE_TIPS.formal));
+      if (res.tone === "formal") c.actions.appendChild(button("Try My voice", "quiet", null, () => rewrite("voice"), TONE_TIPS.voice));
       c.actions.appendChild(copyButton(proposed));
     }
     if (res.truncated) c.body.appendChild(el("p", "card-note", "The reply was cut off at the length limit."));
@@ -524,6 +549,7 @@ function addRewriteCard(res, proposed, segs, sim) {
     const foot = el("div", "card-foot");
     const edit = el("button", "link", "Edit");
     edit.type = "button";
+    edit.title = "Change your writing samples or what Claude noticed about your style";
     edit.addEventListener("click", openVoice);
     foot.append(icon("voice"), document.createTextNode("Based on your writing profile · " + res.voice_samples +
       " sample" + (res.voice_samples === 1 ? "" : "s") + " · "), edit);
@@ -631,6 +657,7 @@ function updateSend() {
   sendBtn.classList.toggle("stop", busy);
   sendBtn.replaceChildren(icon(busy ? "stop" : "send"));
   sendBtn.setAttribute("aria-label", busy ? "Stop" : "Send");
+  sendBtn.title = busy ? "Stop Claude" : "Send (Enter)";
   sendBtn.disabled = !busy && !promptBox.value.trim();
 }
 
@@ -768,7 +795,7 @@ async function openHistory() {
       row.appendChild(main);
       const del = el("button", "icon-btn");
       del.type = "button";
-      del.title = "Delete";
+      del.title = "Delete this conversation";
       del.setAttribute("aria-label", "Delete conversation");
       del.appendChild(icon("trash"));
       del.addEventListener("click", async (e) => {
@@ -900,6 +927,52 @@ $("scrim").addEventListener("click", closeSheets);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { closeSheets(); togglePopover(false); }
 });
+
+/* ---------------------------------------------------------------- hover help */
+
+// Inside LibreOffice the panel is an Edge window that never counts as active, so the browser's own
+// title tooltips don't appear there. Draw them here instead: anything with a title gets one.
+const tipBox = el("div", "tip");
+tipBox.setAttribute("role", "tooltip");
+document.body.appendChild(tipBox);
+let tipFor = null, tipTimer = 0;
+
+function tipText(t) {
+  // Move the title aside so the browser doesn't show its own tooltip as well; code may set it again.
+  if (t.hasAttribute("title")) { t.dataset.tip = t.getAttribute("title"); t.removeAttribute("title"); }
+  return t.dataset.tip || "";
+}
+
+function showTip(t) {
+  const text = tipText(t);
+  if (!text || !t.isConnected) return hideTip();
+  tipBox.textContent = text;
+  tipBox.classList.add("show");
+  const r = t.getBoundingClientRect(), w = tipBox.offsetWidth, h = tipBox.offsetHeight;
+  const x = Math.max(6, Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 6));
+  let y = r.top - h - 6;
+  if (y < 6) y = Math.min(r.bottom + 6, innerHeight - h - 6);
+  tipBox.style.left = x + "px";
+  tipBox.style.top = y + "px";
+}
+
+function hideTip() {
+  clearTimeout(tipTimer);
+  tipFor = null;
+  tipBox.classList.remove("show");
+}
+
+document.addEventListener("pointerover", (e) => {
+  const t = e.target.closest ? e.target.closest("[title], [data-tip]") : null;
+  if (t === tipFor) return;
+  hideTip();
+  if (!t || !tipText(t)) return;
+  tipFor = t;
+  tipTimer = setTimeout(() => showTip(t), 450);
+});
+document.documentElement.addEventListener("pointerleave", hideTip);
+for (const ev of ["pointerdown", "keydown", "scroll", "wheel"]) document.addEventListener(ev, hideTip, true);
+window.addEventListener("blur", hideTip);
 
 /* ---------------------------------------------------------------- start */
 
