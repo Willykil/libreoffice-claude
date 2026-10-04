@@ -32,7 +32,9 @@ GWL_STYLE, GWL_EXSTYLE = -16, -20
 WS_CHILD, WS_VISIBLE, WS_POPUP = 0x40000000, 0x10000000, 0x80000000
 WS_FRAME = 0x00C00000 | 0x00040000 | 0x00080000 | 0x00020000 | 0x00010000    # caption, sizing border, buttons
 WS_EX_FRAME = 0x00040000 | 0x00000100 | 0x00000200 | 0x00000001             # taskbar button, edges
-SWP_NOZORDER, SWP_NOACTIVATE, SWP_FRAMECHANGED, SWP_SHOWWINDOW, SWP_ASYNC = 0x4, 0x10, 0x20, 0x40, 0x4000
+SWP_NOZORDER, SWP_NOACTIVATE, SWP_FRAMECHANGED, SWP_SHOWWINDOW = 0x4, 0x10, 0x20, 0x40
+FRAME = 1 / 60                                  # seconds between resizes passed on to Edge
+PANEL_LIGHT, PANEL_DARK = 0xFAF9F5, 0x1F1E1D    # the panel's background (style.css --bg)
 WM_CLOSE = 0x0010
 WM_ACTIVATE, WA_CLICKACTIVE = 0x0006, 2
 VK_LBUTTON, VK_RBUTTON = 0x01, 0x02
@@ -78,6 +80,17 @@ def _user32():
     u.RECT, u.POINT = wintypes.RECT, wintypes.POINT
     u.thread_id = ctypes.WinDLL("kernel32").GetCurrentThreadId
     return u
+
+
+def _dark_mode():
+    """Whether Windows apps use the dark theme, which Edge, and so the panel, follows."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
+    except Exception:
+        return False
 
 
 def find_child(u, parent, class_name):
@@ -135,6 +148,9 @@ class EdgeEmbed:
         self.proc = None
         self.id = secrets.token_hex(8)
         self.u = _user32()
+        self._size_wanted = None        # (width, height) Edge should be, set by resize()
+        self._size_done = None
+        self._size_event = threading.Event()
 
     def start(self):
         browser = claude_panel.find_browser()
@@ -150,6 +166,12 @@ class EdgeEmbed:
         desc.Bounds = uno.createUnoStruct("com.sun.star.awt.Rectangle", 0, 0, size.Width, size.Height)
         desc.WindowAttributes = 0                        # hidden until the browser is inside it
         self.host = toolkit.createWindow(desc)
+        try:
+            # What shows for a moment where the sidebar grows, before Edge repaints: the panel's own
+            # background rather than a contrasting flash.
+            self.host.setBackground(PANEL_DARK if _dark_mode() else PANEL_LIGHT)
+        except Exception:
+            pass
         handle = self.host.getWindowHandle(uno.ByteSequence(bytes(16)), SYSTEM_WIN32)
         self.host_hwnd = int(getattr(handle, "value", handle) or 0)
         if not self.host_hwnd:
@@ -193,6 +215,7 @@ class EdgeEmbed:
         u.SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED | SWP_SHOWWINDOW |
                        0x1 | 0x2)                                    # SWP_NOSIZE | SWP_NOMOVE
         self._measure_title_bar()
+        threading.Thread(target=self._resizer, daemon=True).start()
         self.resize()
         self.on_ready()
 
@@ -275,12 +298,29 @@ class EdgeEmbed:
         self.host.setPosSize(0, 0, size.Width, size.Height, 15)
         rect = self.u.RECT()
         self.u.GetClientRect(self.host_hwnd, ctypes.byref(rect))      # real pixels, whatever the scaling
-        self.u.SetWindowPos(self.edge, None, 0, -self.top, rect.right, rect.bottom + self.top,
-                            SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNC)
+        self._size_wanted = (rect.right, rect.bottom)
+        self._size_event.set()
+
+    def _resizer(self):
+        """Pass sizes on to Edge at most once a frame, newest only. Dragging the sidebar edge sends a
+        flood of resizes; queueing each one made Edge lay out and paint sizes long gone, so it lagged."""
+        while not self.closed:
+            self._size_event.wait()
+            self._size_event.clear()
+            want = self._size_wanted
+            if self.closed or not self.ready or want is None or want == self._size_done:
+                continue
+            self._size_done = want
+            # Not async: this thread waits until Edge has taken the size, so it is never handed a
+            # backlog. LibreOffice's own thread doesn't wait; it only records the latest size.
+            self.u.SetWindowPos(self.edge, None, 0, -self.top, want[0], want[1] + self.top,
+                                SWP_NOZORDER | SWP_NOACTIVATE)
+            time.sleep(FRAME)
 
     def close(self):
         self.closed = True
         self.ready = False
+        self._size_event.set()                       # let the resizer thread finish
         if self.edge and self.u.IsWindow(self.edge):
             self.u.PostMessageW(self.edge, WM_CLOSE, 0, 0)
         elif self.proc is not None and self.proc.poll() is None:

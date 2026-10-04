@@ -32,6 +32,10 @@ const EFFORT_TIPS = {
   xhigh: "Extra high: thinks even longer",
   max: "Max: as much thinking as it takes, slowest",
 };
+const TRACKED_ON_TIP = "Tracked changes are on: Claude's edits show up as suggestions you accept or reject one by one " +
+  "in Writer (Edit > Track Changes > Manage). Click to turn off.";
+const TRACKED_OFF_TIP = "Tracked changes are off: Claude edits the document directly, and Undo reverts it. " +
+  "Click to turn on, so each edit shows up as a suggestion you accept or reject.";
 const TONE_TIPS = {
   formal: "Rewrite the selected text in a formal, professional tone",
   voice: "Rewrite the selected text the way you write, learned from your writing samples",
@@ -142,7 +146,11 @@ function renderState() {
   // model · effort selector, tracked tag
   const effort = state.effort_supported ? " · " + (EFFORT_SHORT[state.effort] || state.effort) : "";
   $("selectorLabel").textContent = modelName(state.model || "") + effort;
-  $("trackedTag").hidden = !(isWriter() && state.track_changes);
+  // Always shown in Writer, so turning it off by accident doesn't hide the way back.
+  const tag = $("trackedTag");
+  tag.hidden = !isWriter();
+  tag.setAttribute("aria-pressed", String(!!state.track_changes));
+  tag.title = state.track_changes ? TRACKED_ON_TIP : TRACKED_OFF_TIP;
   if (!$("popover").hidden) renderPopover();
 
   const chips = $("chips");
@@ -232,7 +240,7 @@ $("selector").addEventListener("click", (e) => { e.stopPropagation(); togglePopo
 $("popover").addEventListener("click", (e) => e.stopPropagation());
 document.addEventListener("click", () => togglePopover(false));
 $("trackSwitch").addEventListener("change", (e) => saveSetting({ track_changes: e.target.checked }));
-$("trackedTag").addEventListener("click", () => saveSetting({ track_changes: false }));
+$("trackedTag").addEventListener("click", () => saveSetting({ track_changes: !state.track_changes }));
 
 /* ---------------------------------------------------------------- citations */
 
