@@ -154,13 +154,23 @@ def ask_api(settings, system, user_text, images=None):
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
+            _note_usage(resp.headers, body["model"], data)
     except urllib.error.HTTPError as e:
+        _note_usage(e.headers, body["model"], None)
         raise ClaudeError(_http_error_message(e)) from None
     except urllib.error.URLError as e:
         raise ClaudeError("Could not reach the Claude API: %s" % e.reason) from None
     except TimeoutError:
         raise ClaudeError("The request timed out after %d seconds." % timeout) from None
     return parse_response(data)
+
+
+def _note_usage(headers, model, data):
+    try:
+        import claude_usage
+        claude_usage.note_api_reply(headers, model, data)
+    except Exception:      # usage is a nicety; never let it break an answer
+        pass
 
 
 def _http_error_message(e):

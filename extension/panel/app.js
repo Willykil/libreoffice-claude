@@ -131,9 +131,8 @@ function renderState() {
   $("ctxLabel").textContent = doc ? doc.label : "Open a document, spreadsheet or presentation.";
   $("welcomeSub").textContent = WELCOME[doc && doc.kind]
     || "Select some text, then pick an action below or ask me anything about your document.";
-  $("connection").textContent = state.connection === "api"
-    ? "Using your Anthropic API key (billed per use)"
-    : "Using your Claude subscription";
+  if (state.connection !== usageFor) { usageFor = state.connection; usage = null; loadUsage(false); }
+  renderFootnote();
 
   // Rewrite as Formal | My voice (Writer)
   $("tone").hidden = !isWriter();
@@ -617,6 +616,7 @@ async function ask(body, shownText, images) {
     toast("Stopped");
   } else if (res.error) {
     addError(res.error, res);
+    loadUsage(true);         // a limit reached shows up there too
   } else {
     const shown = shownText || body.instruction || "";
     res.tone = body.tone || "";
@@ -632,6 +632,7 @@ async function ask(body, shownText, images) {
     }
     addReply(res);
     api("/api/history", { save: chat }).catch(() => {});
+    loadUsage(true);
     if (res.edits && res.edits.done && res.edits.done.length) poll();      // the selection label may have changed
   }
   renderState();
@@ -736,7 +737,7 @@ $("newChat").addEventListener("click", () => {
 
 /* ---------------------------------------------------------------- sheets (settings, history, voice) */
 
-const SHEETS = ["settings", "history", "voice"];
+const SHEETS = ["settings", "history", "voice", "usage"];
 
 function openSheet(id) {
   togglePopover(false);
@@ -952,6 +953,10 @@ $("voiceDefault").addEventListener("change", (e) => voiceCall({ default: e.targe
 
 $("openSettings").addEventListener("click", openSettings);
 $("openHistory").addEventListener("click", openHistory);
+$("openUsage").addEventListener("click", openUsage);
+$("connection").addEventListener("click", openUsage);
+$("closeUsage").addEventListener("click", closeSheets);
+$("refreshUsage").addEventListener("click", () => { renderUsage(true); loadUsage(true); });
 $("closeSettings").addEventListener("click", closeSheets);
 $("closeHistory").addEventListener("click", closeSheets);
 $("cancelSettings").addEventListener("click", closeSheets);
@@ -1097,6 +1102,194 @@ document.addEventListener("pointerover", (e) => {
 document.documentElement.addEventListener("pointerleave", hideTip);
 for (const ev of ["pointerdown", "keydown", "scroll", "wheel"]) document.addEventListener(ev, hideTip, true);
 window.addEventListener("blur", hideTip);
+
+/* ---------------------------------------------------------------- usage */
+
+// Subscription: the plan's limits as Claude Code reports them (the same numbers as /usage and the
+// desktop app). API key: the per-minute rate limits from the last reply, and this session's tokens.
+let usage = null, usageFor = null, usageLoading = false;
+const USAGE_EVERY = 5 * 60 * 1000;
+
+async function loadUsage(fresh) {
+  if (usageLoading) return;
+  usageLoading = true;
+  try {
+    usage = await api("/api/usage" + (fresh ? "?fresh=1" : ""));
+  } catch (e) { /* keep what we had */ }
+  usageLoading = false;
+  renderFootnote();
+  if (!$("usage").hidden) renderUsage();
+}
+
+const fmt = (n) => Math.round(n).toLocaleString();
+function short(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k";
+  return String(n);
+}
+function money(n, currency) {
+  try { return n.toLocaleString(undefined, { style: "currency", currency: currency || "USD", maximumFractionDigits: n < 1 ? 3 : 2 }); }
+  catch (e) { return "$" + n.toFixed(2); }
+}
+function level(pct, severity) {
+  if (severity === "critical" || pct >= 100) return "full";
+  if (severity === "warning" || pct >= 80) return "warn";
+  return "";
+}
+
+// "in 2 h 10 min" for a reset within a day, otherwise "Thu 9:00 AM", like the desktop app.
+function resetText(when, prefix) {
+  if (!when) return "";
+  const t = typeof when === "number" ? when * (when < 1e12 ? 1000 : 1) : Date.parse(when);
+  if (!t || isNaN(t)) return "";
+  const mins = Math.max(0, Math.round((t - Date.now()) / 60000));
+  let text;
+  if (mins < 1) text = "in less than a minute";
+  else if (mins < 60) text = "in " + mins + " min";
+  else if (mins < 24 * 60) text = "in " + Math.floor(mins / 60) + " h" + (mins % 60 ? " " + (mins % 60) + " min" : "");
+  else text = new Date(t).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+  return (prefix || "Resets") + " " + text;
+}
+
+function headlineRow(u) {
+  const rows = (u && u.plan) || [];
+  return rows.find((r) => r.group === "session") || rows[0] || null;
+}
+
+function renderFootnote() {
+  const f = $("connection"), u = usage && usage.connection === state.connection ? usage : null;
+  const parts = [];
+  if (state.connection === "api") {
+    parts.push(document.createTextNode("Anthropic API key (billed per use)"));
+    const s = u && u.session;
+    if (s && s.requests) {
+      const tokens = s.input_tokens + s.output_tokens + s.cache_read_tokens + s.cache_write_tokens;
+      parts.push(document.createTextNode(" · " + short(tokens) + " tokens" +
+        (s.priced ? " ≈ " + money(s.cost_usd) : "") + " this session"));
+    }
+  } else {
+    parts.push(document.createTextNode("Claude subscription"));
+    const row = headlineRow(u);
+    if (row) {
+      const pct = Math.round(row.percent);
+      const span = el("span", level(pct, row.severity), " · " + (row.group === "session" ? "Session" : row.label) +
+        " " + pct + "% used");
+      parts.push(span, document.createTextNode(resetText(row.resets_at, " · resets")));
+    }
+  }
+  f.replaceChildren(...parts);
+}
+
+function meterRow(label, value, pct, sub, severity) {
+  const row = el("div", "usage-row");
+  const line = el("div", "usage-line");
+  line.append(el("span", "usage-label", label), el("span", "usage-value", value));
+  const meter = el("div", "meter " + level(pct, severity));
+  const bar = el("span");
+  bar.style.width = Math.max(0, Math.min(100, pct)) + "%";
+  meter.appendChild(bar);
+  meter.setAttribute("role", "meter");
+  meter.setAttribute("aria-valuenow", String(Math.round(pct)));
+  meter.setAttribute("aria-valuemin", "0");
+  meter.setAttribute("aria-valuemax", "100");
+  meter.setAttribute("aria-label", label);
+  row.append(line, meter);
+  if (sub) row.appendChild(el("span", "usage-sub", sub));
+  return row;
+}
+
+function section(title, ...children) {
+  const g = el("div", "usage-group");
+  g.append(el("span", "section-label", title), ...children);
+  return g;
+}
+
+function stats(pairs) {
+  const g = el("div", "usage-stats");
+  for (const [k, v] of pairs) g.append(el("span", "k", k), el("span", "v", v));
+  return g;
+}
+
+function sessionSection(s, withCost) {
+  if (!s || !s.requests) return section("This LibreOffice session", el("p", "usage-note", "No requests yet."));
+  const pairs = [["Requests", fmt(s.requests)], ["Input tokens", fmt(s.input_tokens)],
+                 ["Output tokens", fmt(s.output_tokens)]];
+  if (s.cache_read_tokens || s.cache_write_tokens) pairs.push(["Cached tokens", fmt(s.cache_read_tokens + s.cache_write_tokens)]);
+  if (withCost) pairs.push(["Estimated cost", s.priced ? money(s.cost_usd) : "Unknown for this model"]);
+  return section("This LibreOffice session", stats(pairs));
+}
+
+const RATE_LABELS = { requests: "Requests", tokens: "Tokens", "input-tokens": "Input tokens", "output-tokens": "Output tokens" };
+
+function renderUsage(loading) {
+  const body = $("usageBody");
+  const u = usage && usage.connection === state.connection ? usage : null;
+  if (loading || !u) {
+    body.replaceChildren(el("p", "usage-loading", "Checking your usage…"));
+    return;
+  }
+  const out = [];
+  if (u.connection === "api") {
+    const rl = u.rate_limits;
+    if (rl) {
+      const rows = Object.keys(RATE_LABELS).filter((k) => rl[k]).map((k) => {
+        const r = rl[k], left = r.remaining !== undefined ? r.remaining : r.limit;
+        return meterRow(RATE_LABELS[k], fmt(left) + " of " + fmt(r.limit) + " left",
+                        100 * (r.limit - left) / (r.limit || 1), resetText(r.reset, "Refills"));
+      });
+      out.push(section("Rate limits, per minute", ...rows));
+      if (rl.retry_after) out.push(el("p", "usage-note error", "Rate limited: try again in " + rl.retry_after + " s."));
+    } else {
+      out.push(section("Rate limits, per minute", el("p", "usage-note", "Shown after your first request.")));
+    }
+    out.push(sessionSection(u.session, true));
+    const note = el("p", "usage-note");
+    const link = el("a", "", "console.anthropic.com");
+    link.href = "https://console.anthropic.com/usage";
+    link.target = "_blank";
+    link.rel = "noopener";
+    note.append("Your balance and monthly spend are on ", link,
+                ". An API key can't read them; the cost above is estimated from list prices.");
+    out.push(note);
+  } else {
+    if (u.error) out.push(el("p", "usage-note error", u.error));
+    const rows = u.plan || [];
+    const groups = [];
+    for (const r of rows) {
+      let g = groups.find((x) => x.name === r.group);
+      if (!g) groups.push(g = { name: r.group, rows: [] });
+      g.rows.push(r);
+    }
+    const plan = u.subscription ? u.subscription.charAt(0).toUpperCase() + u.subscription.slice(1) + " plan" : "Plan usage";
+    for (const g of groups) {
+      const title = g.name === "session" ? plan : g.name === "weekly" ? "Weekly limits" : g.name;
+      out.push(section(title, ...g.rows.map((r) => meterRow(r.label, Math.round(r.percent) + "% used", r.percent,
+                                                            resetText(r.resets_at), r.severity))));
+    }
+    const ex = u.extra;
+    if (ex) {
+      const cur = ex.currency;
+      const used = ex.used != null ? money(ex.used / 100, cur) : "—";
+      const value = ex.limit != null ? used + " of " + money(ex.limit / 100, cur) : used + " spent";
+      out.push(section("Extra usage", meterRow("This month", value, ex.percent || 0, "")));
+    }
+    if (u.status && u.status.status === "rejected") {
+      out.push(el("p", "usage-note error", "You've reached a limit. " + resetText(u.status.resetsAt, "It resets") + "."));
+    }
+    out.push(sessionSection(u.session, false));
+    out.push(el("p", "usage-note", "Your limits are shared with claude.ai, the Claude app and Claude Code." +
+      (u.at ? " Checked " + when(u.at) + "." : "")));
+  }
+  body.replaceChildren(...out);
+}
+
+async function openUsage() {
+  openSheet("usage");
+  renderUsage(!usage);
+  await loadUsage(false);
+}
+
+setInterval(() => loadUsage(false), USAGE_EVERY);
 
 /* ---------------------------------------------------------------- start */
 

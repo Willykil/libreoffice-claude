@@ -221,7 +221,11 @@ table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 .send:disabled { background: var(--surface-2); color: var(--muted); }
 .send.stop { background: var(--text); color: var(--bg); }
-.footnote { margin-top: 7px; font-size: 11.5px; color: var(--muted); text-align: center; }
+.footnote { display: block; width: 100%; margin-top: 7px; padding: 2px 4px; border: 0; border-radius: 6px; background: none;
+  font: inherit; font-size: 11.5px; color: var(--muted); text-align: center; cursor: pointer; }
+.footnote:hover { color: var(--text); background: var(--surface-2); }
+.footnote .warn { color: var(--accent); font-weight: 600; }
+.footnote .full { color: var(--danger); font-weight: 600; }
 
 /* model / effort popover */
 .popover {
@@ -472,3 +476,23 @@ ins.d { text-decoration: none; background: var(--ins-bg); color: var(--ins-text)
 .msg.user .sent-images img { max-width: 160px; max-height: 120px; border-radius: 10px; border: 1px solid var(--border); display: block; }
 .image-note { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
 .attach svg { width: 18px; height: 18px; }
+
+/* ---------------------------------------------------------------- usage */
+#usage .sheet-head h2 { flex: 1; }
+.usage-group { display: flex; flex-direction: column; gap: 14px; }
+.usage-row { display: flex; flex-direction: column; gap: 6px; }
+.usage-line { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.usage-label { font-size: 13.5px; font-weight: 600; }
+.usage-value { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-sub { font-size: 12px; color: var(--muted); }
+.meter { height: 8px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.meter > span { display: block; height: 100%; border-radius: 99px; background: var(--ok); transition: width .3s; }
+.meter.warn > span { background: var(--accent); }
+.meter.full > span { background: var(--danger); }
+.usage-stats { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; font-size: 13px; }
+.usage-stats .k { color: var(--muted); }
+.usage-stats .v { font-variant-numeric: tabular-nums; text-align: right; }
+.usage-note { margin: 0; padding: 10px 12px; border-radius: 10px; background: var(--surface-2); font-size: 12.5px; color: var(--muted); }
+.usage-note.error { background: var(--danger-soft); color: var(--danger); white-space: pre-wrap; }
+.usage-loading { color: var(--muted); text-align: center; padding: 40px 0; }
+.usage-note a { color: var(--accent); }

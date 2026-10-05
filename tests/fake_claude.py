@@ -17,6 +17,17 @@ def main():
         with open(log, "w", encoding="utf-8") as f:
             json.dump({"argv": argv, "system": system, "stdin": stdin, "cwd": os.getcwd()}, f)
     mode = os.environ.get("FAKE_CLAUDE_MODE", "ok")
+    if '"get_usage"' in stdin:
+        request = json.loads(stdin.splitlines()[0])
+        if mode == "usage_unsupported":
+            response = {"subtype": "error", "request_id": request["request_id"],
+                        "error": "Unsupported control request subtype: get_usage"}
+        else:
+            response = {"subtype": "success", "request_id": request["request_id"],
+                        "response": json.loads(os.environ["FAKE_CLAUDE_USAGE"])}
+        print(json.dumps({"type": "system", "subtype": "init"}))
+        print(json.dumps({"type": "control_response", "response": response}))
+        return
     if mode == "delayed":
         import time
         time.sleep(1)
@@ -31,8 +42,12 @@ def main():
             time.sleep(0.4)
         mode = "ok"
     if mode == "ok":
+        print(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed",
+                                                                          "rateLimitType": "five_hour"}}))
         print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
-                          "result": os.environ.get("FAKE_CLAUDE_REPLY", "fake reply")}))
+                          "result": os.environ.get("FAKE_CLAUDE_REPLY", "fake reply"),
+                          "usage": {"input_tokens": 120, "output_tokens": 30}, "total_cost_usd": 0.0012,
+                          "modelUsage": {"claude-opus-5-5": {}}}))
     elif mode == "logged_out":
         print(json.dumps({"type": "result", "subtype": "success", "is_error": True,
                           "result": "Not logged in · Please run /login"}))
