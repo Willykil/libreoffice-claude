@@ -221,11 +221,6 @@ table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 .send:disabled { background: var(--surface-2); color: var(--muted); }
 .send.stop { background: var(--text); color: var(--bg); }
-.footnote { display: block; width: 100%; margin-top: 7px; padding: 2px 4px; border: 0; border-radius: 6px; background: none;
-  font: inherit; font-size: 11.5px; color: var(--muted); text-align: center; cursor: pointer; }
-.footnote:hover { color: var(--text); background: var(--surface-2); }
-.footnote .warn { color: var(--accent); font-weight: 600; }
-.footnote .full { color: var(--danger); font-weight: 600; }
 
 /* model / effort popover */
 .popover {
@@ -496,3 +491,20 @@ ins.d { text-decoration: none; background: var(--ins-bg); color: var(--ins-text)
 .usage-note.error { background: var(--danger-soft); color: var(--danger); white-space: pre-wrap; }
 .usage-loading { color: var(--muted); text-align: center; padding: 40px 0; }
 .usage-note a { color: var(--accent); }
+.usage-strip { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; margin-top: 7px;
+  padding: 2px 6px; border: 0; border-radius: 6px; background: none; font: inherit; font-size: 11.5px; color: var(--muted);
+  cursor: pointer; }
+.usage-strip:hover { background: var(--surface-2); color: var(--text); }
+.strip-label { font-weight: 600; white-space: nowrap; }
+.strip-meter { display: block; flex: 0 0 56px; height: 4px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.usage-strip:hover .strip-meter { background: var(--border); }
+.strip-meter > span { display: block; height: 100%; border-radius: 99px; background: var(--ok); }
+.usage-strip.warn .strip-meter > span { background: var(--accent); }
+.usage-strip.full .strip-meter > span { background: var(--danger); }
+.usage-strip.warn .strip-label { color: var(--accent); }
+.usage-strip.full .strip-label { color: var(--danger); }
+.strip-extra { white-space: nowrap; }
+.strip-extra.warn { color: var(--accent); font-weight: 600; }
+.strip-extra.full { color: var(--danger); font-weight: 600; }
+.strip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.strip-meter[hidden] { display: none; }

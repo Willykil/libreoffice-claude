@@ -56,7 +56,8 @@ or the whole document / the sheet's filled area when nothing is selected) and of
   written into the slides yet (LibreOffice can't undo edits made that way).
 - **Calc** replies are previewed as a grid (`=` values become live formulas); *Write below* /
   *Write at selection*, with a warning before overwriting cells that have content.
-- **Usage** (gauge icon, or click the line under the message box) - with your Claude subscription:
+- **Usage** - the line under the message box shows it live with a tiny meter (e.g. *Session 34% ·
+  resets 2h 9m*, plus any weekly limit running low); click it or the gauge icon for details. With your Claude subscription:
   how much of the current 5-hour session and the weekly limits you've used, when each resets, any
   per-model weekly limit and extra usage spend, the same numbers as the Claude app (asked of Claude Code,
   which costs nothing against your plan; needs a recent Claude Code, `claude update`). With an API key:

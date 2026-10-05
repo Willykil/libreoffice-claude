@@ -90,7 +90,9 @@
           <button class="send" id="send" type="submit" aria-label="Send" title="Send (Enter)" disabled><svg><use href="#i-send"/></svg></button>
         </div>
       </form>
-      <button type="button" class="footnote" id="connection" title="How this panel reaches Claude, and how much of your usage is left. Click for details."></button>
+      <button type="button" class="usage-strip" id="usageStrip" title="How this panel reaches Claude and how much of your usage is left. Click for details.">
+        <span class="strip-label" id="stripLabel"></span><span class="strip-meter" id="stripMeter" hidden><span></span></span><span class="strip-text" id="stripText"></span><span class="strip-extra" id="stripExtra"></span>
+      </button>
 
       <div class="popover" id="popover" role="dialog" aria-label="Model and effort" hidden>
         <div class="pop-label" title="Bigger models are more careful, smaller ones are faster">Model</div>

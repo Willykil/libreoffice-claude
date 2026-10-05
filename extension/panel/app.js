@@ -954,7 +954,7 @@ $("voiceDefault").addEventListener("change", (e) => voiceCall({ default: e.targe
 $("openSettings").addEventListener("click", openSettings);
 $("openHistory").addEventListener("click", openHistory);
 $("openUsage").addEventListener("click", openUsage);
-$("connection").addEventListener("click", openUsage);
+$("usageStrip").addEventListener("click", openUsage);
 $("closeUsage").addEventListener("click", closeSheets);
 $("refreshUsage").addEventListener("click", () => { renderUsage(true); loadUsage(true); });
 $("closeSettings").addEventListener("click", closeSheets);
@@ -1108,7 +1108,7 @@ window.addEventListener("blur", hideTip);
 // Subscription: the plan's limits as Claude Code reports them (the same numbers as /usage and the
 // desktop app). API key: the per-minute rate limits from the last reply, and this session's tokens.
 let usage = null, usageFor = null, usageLoading = false;
-const USAGE_EVERY = 5 * 60 * 1000;
+const USAGE_EVERY = 2 * 60 * 1000;
 
 async function loadUsage(fresh) {
   if (usageLoading) return;
@@ -1151,33 +1151,68 @@ function resetText(when, prefix) {
   return (prefix || "Resets") + " " + text;
 }
 
+// " · resets 2h 10m", or " · resets Thu" beyond a day: short enough for the bottom line.
+function compactReset(when) {
+  const t = typeof when === "number" ? when * (when < 1e12 ? 1000 : 1) : Date.parse(when || "");
+  if (!t || isNaN(t)) return "";
+  const mins = Math.max(0, Math.round((t - Date.now()) / 60000));
+  if (mins >= 24 * 60) return " · resets " + new Date(t).toLocaleDateString(undefined, { weekday: "short" });
+  return " · resets " + (mins >= 60 ? Math.floor(mins / 60) + "h " : "") + (mins % 60) + "m";
+}
+
 function headlineRow(u) {
   const rows = (u && u.plan) || [];
   return rows.find((r) => r.group === "session") || rows[0] || null;
 }
 
+// The line under the message box: how the panel connects, or once known, the usage that matters
+// most right now with a tiny meter. Clicking it opens the Usage sheet.
 function renderFootnote() {
-  const f = $("connection"), u = usage && usage.connection === state.connection ? usage : null;
-  const parts = [];
-  if (state.connection === "api") {
-    parts.push(document.createTextNode("Anthropic API key (billed per use)"));
-    const s = u && u.session;
-    if (s && s.requests) {
-      const tokens = s.input_tokens + s.output_tokens + s.cache_read_tokens + s.cache_write_tokens;
-      parts.push(document.createTextNode(" · " + short(tokens) + " tokens" +
-        (s.priced ? " ≈ " + money(s.cost_usd) : "") + " this session"));
+  const u = usage && usage.connection === state.connection ? usage : null;
+  let label = "", pct = null, text = "", lvl = "", extra = "", extraLvl = "";
+  if (u && u.connection === "api") {
+    const rl = u.rate_limits, s = u.session;
+    const tight = rl && Object.keys(RATE_LABELS).filter((k) => rl[k] && rl[k].limit)
+      .map((k) => ({ k, r: rl[k], left: rl[k].remaining !== undefined ? rl[k].remaining : rl[k].limit }))
+      .sort((a, b) => a.left / a.r.limit - b.left / b.r.limit)[0];
+    if (tight) {
+      label = "API";
+      pct = 100 * (tight.r.limit - tight.left) / tight.r.limit;
+      lvl = level(pct);
+      text = short(tight.left) + (tight.k === "requests" ? " requests" : " tokens") + " left/min";
     }
-  } else {
-    parts.push(document.createTextNode("Claude subscription"));
+    if (s && s.requests && s.priced) {
+      label = "API";
+      text += (text ? " · " : "") + "≈" + money(s.cost_usd);
+    }
+  } else if (u) {
     const row = headlineRow(u);
     if (row) {
-      const pct = Math.round(row.percent);
-      const span = el("span", level(pct, row.severity), " · " + (row.group === "session" ? "Session" : row.label) +
-        " " + pct + "% used");
-      parts.push(span, document.createTextNode(resetText(row.resets_at, " · resets")));
+      label = row.group === "session" ? "Session" : row.label;
+      pct = row.percent;
+      lvl = level(pct, row.severity);
+      text = Math.round(pct) + "%" + compactReset(row.resets_at);
+      // A weekly limit running low matters more than a quiet session, so it's named too.
+      const weekly = (u.plan || []).filter((r) => r !== row && level(r.percent, r.severity))
+        .sort((a, b) => b.percent - a.percent)[0];
+      if (weekly) {
+        extra = "· " + (weekly.label === "All models" ? "Week" : weekly.label) + " " + Math.round(weekly.percent) + "%";
+        extraLvl = level(weekly.percent, weekly.severity);
+      }
+    }
+    if (u.status && u.status.status === "rejected") {
+      lvl = "full";
+      text = "limit reached" + compactReset(u.status.resetsAt);
     }
   }
-  f.replaceChildren(...parts);
+  if (!label) text = state.connection === "api" ? "Using your Anthropic API key (billed per use)" : "Using your Claude subscription";
+  $("usageStrip").className = "usage-strip " + lvl;
+  $("stripLabel").textContent = label;
+  $("stripMeter").hidden = pct === null;
+  $("stripMeter").firstElementChild.style.width = Math.max(0, Math.min(100, pct || 0)) + "%";
+  $("stripText").textContent = text;
+  $("stripExtra").textContent = extra;
+  $("stripExtra").className = "strip-extra " + extraLvl;
 }
 
 function meterRow(label, value, pct, sub, severity) {
@@ -1290,6 +1325,7 @@ async function openUsage() {
 }
 
 setInterval(() => loadUsage(false), USAGE_EVERY);
+setInterval(renderFootnote, 30 * 1000);      // keeps "resets in" counting down
 
 /* ---------------------------------------------------------------- start */
 
