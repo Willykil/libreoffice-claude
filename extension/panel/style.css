@@ -160,33 +160,37 @@ table.grid td.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* composer */
 .composer { position: relative; padding: 8px 14px 12px; border-top: 1px solid var(--border); background: var(--bg); }
 .actions-row { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 8px; }
-.app.chatting .actions-row {
-  flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
-  -webkit-mask-image: linear-gradient(to right, #000 88%, transparent); mask-image: linear-gradient(to right, #000 88%, transparent);
-}
-.actions-row::-webkit-scrollbar { display: none; }
+/* Wraps at any width so every action stays readable and reachable; a little more compact once chatting. */
+.app.chatting .actions-row { gap: 5px; padding-bottom: 6px; }
+.app.chatting .chip, .app.chatting .tone { height: 28px; }
+.app.chatting .chip { padding: 0 10px; font-size: 12.5px; }
+.app.chatting .tone-btn { height: 22px; }
 .chips { display: contents; }
 .chip {
   flex: none; height: 32px; padding: 0 12px; border-radius: 999px;
-  border: 1px solid var(--border); background: var(--surface); font-size: 13px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 13px; white-space: nowrap;
 }
-.chip:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-.chip:disabled { opacity: .45; }
+.chip:hover:not(:disabled):not(.needs-selection) { border-color: var(--accent); color: var(--accent); }
+.chip:disabled { opacity: .55; }
+/* Waiting on a selection: still legible, and a click says what to do instead of nothing happening. */
+.chip.needs-selection { color: var(--muted); border-style: dashed; cursor: help; }
 
 .tone {
   flex: none; display: flex; align-items: center; gap: 2px; height: 32px; padding: 0 3px 0 12px;
   border-radius: 999px; border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); background: var(--surface);
 }
-.tone-label { font-size: 13px; padding-right: 4px; white-space: nowrap; }
+.tone-label { font-size: 13px; color: var(--text); padding-right: 4px; white-space: nowrap; }
 .tone-btn {
   display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 10px; border: 0; border-radius: 999px;
-  background: transparent; color: var(--muted); font-size: 12.5px; font-weight: 600; white-space: nowrap;
+  background: transparent; color: var(--text); font-size: 12.5px; font-weight: 600; white-space: nowrap;
 }
 .tone-btn svg { width: 13px; height: 13px; }
-.tone-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.tone-btn:hover:not(:disabled):not(.needs-selection) { background: var(--surface-2); color: var(--text); }
 .tone-btn.default { background: var(--accent); color: var(--on-accent); }
-.tone-btn.default:hover:not(:disabled) { background: var(--accent-hover); color: var(--on-accent); }
-.tone-btn:disabled { opacity: .45; }
+.tone-btn.default:hover:not(:disabled):not(.needs-selection) { background: var(--accent-hover); color: var(--on-accent); }
+.tone-btn:disabled { opacity: .55; }
+.tone-btn.needs-selection { cursor: help; }
+.tone-btn.needs-selection:not(.default) { color: var(--muted); }
 
 .input {
   display: flex; flex-direction: column; gap: 4px; padding: 10px 8px 8px 14px;
