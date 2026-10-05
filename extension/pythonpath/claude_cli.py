@@ -85,7 +85,7 @@ def _registry_path():
     return os.pathsep.join(parts) or None
 
 
-def build_command(exe, settings, system_file):
+def build_command(exe, settings, system_file, images=False):
     cmd = [exe, "-p",
            # Streamed, so a long answer shows it's still coming instead of looking stuck.
            "--output-format", "stream-json", "--verbose", "--include-partial-messages",
@@ -101,7 +101,20 @@ def build_command(exe, settings, system_file):
         cmd += ["--model", model]
     if settings.get("effort") and supports_effort(model):
         cmd += ["--effort", settings["effort"]]
+    if images:          # the message comes as JSON on stdin, so it can carry the pictures
+        cmd += ["--input-format", "stream-json"]
     return cmd
+
+
+def stdin_message(user_text, images):
+    """What Claude Code reads on stdin: the plain text, or a JSON message with the pictures in it."""
+    if not images:
+        return user_text.encode("utf-8")
+    import json
+    content = [{"type": "image", "source": {"type": "base64", "media_type": i["media_type"], "data": i["data"]}}
+               for i in images]
+    content.append({"type": "text", "text": user_text})
+    return (json.dumps({"type": "user", "message": {"role": "user", "content": content}}) + "\n").encode("utf-8")
 
 
 # Claude Code gets this long without printing anything before we give up on it; a long
@@ -109,8 +122,10 @@ def build_command(exe, settings, system_file):
 MAX_SECONDS = 30 * 60
 
 
-def ask(settings, system, user_text, cancel=None):
-    """Returns (text, truncated). Raises ClaudeError, or Cancelled if `cancel` gets set."""
+def ask(settings, system, user_text, cancel=None, images=None):
+    """Returns (text, truncated). Raises ClaudeError, or Cancelled if `cancel` gets set.
+
+    images: optional [{"media_type": "image/png", "data": base64}], sent with the text."""
     exe = find_claude(settings)
     if not exe:
         raise ClaudeError(INSTALL_HELP)
@@ -121,12 +136,12 @@ def ask(settings, system, user_text, cancel=None):
             f.write(system)
         flags = 0x08000000 if sys.platform == "win32" else 0   # CREATE_NO_WINDOW
         try:
-            proc = subprocess.Popen(build_command(exe, settings, system_file), stdin=subprocess.PIPE,
+            proc = subprocess.Popen(build_command(exe, settings, system_file, bool(images)), stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     cwd=tempfile.gettempdir(), creationflags=flags)
         except OSError as e:
             raise ClaudeError("Couldn't start Claude Code (%s): %s" % (exe, e)) from None
-        stdout, stderr = _communicate(proc, user_text.encode("utf-8"), idle, cancel)
+        stdout, stderr = _communicate(proc, stdin_message(user_text, images), idle, cancel)
     finally:
         try:
             os.remove(system_file)
