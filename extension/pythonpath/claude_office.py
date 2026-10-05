@@ -232,18 +232,16 @@ def writer_paragraphs(doc):
 
 
 def _table_text(table):
-    rows = table.getRows().getCount()
-    cols = table.getColumns().getCount()
-    lines = []
-    for r in range(rows):
-        cells = []
-        for c in range(cols):
-            try:
-                cells.append(table.getCellByName(_col_letters(c) + str(r + 1)).getString())
-            except Exception:
-                pass  # merged cells have no name
-        lines.append("\t".join(cells))
-    return "\n".join(lines)
+    """One line per row, each cell by its name, so Claude can fill it in ("cell": "B2")."""
+    rows = []
+    for name in table.getCellNames():
+        m = re.match(r"[A-Za-z]+(\d+)", name)
+        row = m.group(1) if m else name
+        if not rows or rows[-1][0] != row:
+            rows.append((row, []))
+        text = " / ".join(table.getCellByName(name).getString().split("\n"))
+        rows[-1][1].append("%s: %s" % (name, text if text.strip() else "(empty)"))
+    return "\n".join(" | ".join(cells) for _, cells in rows)
 
 
 def writer_review_notes(doc):
