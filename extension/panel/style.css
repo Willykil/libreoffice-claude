@@ -457,3 +457,18 @@ ins.d { text-decoration: none; background: var(--ins-bg); color: var(--ins-text)
   transition: opacity .12s;
 }
 .tip.show { opacity: 1; visibility: visible; }
+
+/* Screenshots waiting to be sent, and the ones sent with a message. */
+.attachments { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 2px; }
+.thumb { position: relative; width: 56px; height: 56px; border-radius: 8px; overflow: hidden;
+  border: 1px solid var(--border); background: var(--surface-2); flex: none; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb .remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; padding: 0; border: 0;
+  border-radius: 50%; display: grid; place-items: center; background: rgba(0, 0, 0, .6); color: #fff; cursor: pointer; }
+.thumb .remove svg { width: 10px; height: 10px; }
+.input.dropping { border-color: var(--accent); background: var(--accent-soft); }
+.msg.user .sent-images { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; margin-bottom: 6px; }
+.msg.user { flex-direction: column; align-items: flex-end; }
+.msg.user .sent-images img { max-width: 160px; max-height: 120px; border-radius: 10px; border: 1px solid var(--border); display: block; }
+.image-note { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.attach svg { width: 18px; height: 18px; }

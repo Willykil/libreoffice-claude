@@ -199,6 +199,19 @@ class UnoTest(unittest.TestCase):
             self.assertEqual(merging.getByName(name).getPropertyValue("MergeToolBar"), "standardbar")
         self.assertIn("com.sun.star.presentation.PresentationDocument", menu.getPropertyValue("Context"))
 
+    def test_screenshots_sent_with_the_question(self):
+        self.open("swriter")
+        image = {"media_type": "image/png", "data": "iVBORw0KGgo="}
+        self.api("/api/ask", {"instruction": "what's wrong here?", "images": [image]})
+        content = self.last_prompt()
+        self.assertEqual(content[0]["source"], {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="})
+        self.assertIn("what's wrong here?", content[-1]["text"])
+        self.api("/api/ask", {"images": [image]})                  # a picture alone is a question too
+        self.assertIn(claude_panel.IMAGES_ONLY, self.last_prompt()[-1]["text"])
+        self.assertIn("up to 5", self.api("/api/ask", {"instruction": "x", "images": [image] * 6})["error"])
+        self.assertIn("isn't supported", self.api("/api/ask", {"instruction": "x", "images": [
+            {"media_type": "image/svg+xml", "data": "PHN2Zz4="}]})["error"])
+
     def test_sidebar_can_go_wide(self):
         cp = self.ctx.ServiceManager.createInstanceWithContext(
             "com.sun.star.configuration.ConfigurationProvider", self.ctx)

@@ -34,6 +34,14 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(body["fallbacks"], "default")
         self.assertNotIn("thinking", body)
 
+    def test_images_come_before_the_text(self):
+        self.mock.text("A chart")
+        claude_api.ask(self.settings, "SYS", "what is this?",
+                       images=[{"media_type": "image/jpeg", "data": "/9j/AA=="}])
+        self.assertEqual(self.mock.requests[0]["body"]["messages"][0]["content"], [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "/9j/AA=="}},
+            {"type": "text", "text": "what is this?"}])
+
     def test_haiku_gets_no_effort_or_fallbacks(self):
         body, headers = claude_api.build_request(dict(self.settings, model="claude-haiku-4-5"), "s", "u")
         self.assertNotIn("output_config", body)

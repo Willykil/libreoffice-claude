@@ -41,6 +41,10 @@ STATIC = {
 PANEL_WIDTH, PANEL_HEIGHT = 440, 860
 SEEN_WINDOW = 4.0      # seconds: a panel that polled this recently counts as open
 MAX_BODY = 32 * 1024 * 1024     # a 20 MB document, base64-encoded, plus room
+MAX_IMAGES = 5                  # screenshots sent with one request
+MAX_IMAGE_BYTES = 5 * 1024 * 1024       # the API's limit for one image
+IMAGE_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp")
+IMAGES_ONLY = "Look at the attached image and help with what it shows, in the context of this file."
 
 
 class PanelServer:
@@ -146,6 +150,11 @@ class PanelServer:
 
     def ask(self, body, doc=None):
         instruction = (body.get("instruction") or "").strip()
+        images, problem = check_images(body.get("images"))
+        if problem:
+            return {"error": problem}
+        if images and not instruction and not body.get("action") and not body.get("tone"):
+            instruction = IMAGES_ONLY
         if body.get("action") in claude_actions.PROMPTS:
             instruction = claude_actions.PROMPTS[body["action"]]
         tone = body.get("tone")
@@ -179,7 +188,7 @@ class PanelServer:
         # The paragraphs as Claude sees them, so its [P12] edits land there even if the user types meanwhile.
         paragraphs = claude_office.writer_paragraphs(doc) if context.kind == claude_office.WRITER else None
 
-        result = self._claude(settings, system, user_text)
+        result = self._claude(settings, system, user_text, images)
         if isinstance(result, dict):
             return result
         text, truncated = result
@@ -211,7 +220,7 @@ class PanelServer:
                 "before": context.before, "after": context.after,
                 "voice": voice is not None, "voice_samples": len(voice["samples"]) if voice else 0}
 
-    def _claude(self, settings, system, user_text):
+    def _claude(self, settings, system, user_text, images=None):
         """Run one Claude request (one at a time; Stop cancels it). (text, truncated) or an error dict."""
         cancel = threading.Event()
         with self._lock:
@@ -219,7 +228,7 @@ class PanelServer:
                 return {"error": "Claude is still working on the previous request."}
             self._request = cancel
         try:
-            return _run_cancellable(lambda: claude_api.ask(settings, system, user_text, cancel), cancel)
+            return _run_cancellable(lambda: claude_api.ask(settings, system, user_text, cancel, images), cancel)
         except claude_api.Cancelled:
             return {"cancelled": True}
         except claude_api.ClaudeError as e:
@@ -451,6 +460,23 @@ class PanelServer:
                 return {"conversations": items}
             self._save_history(items)
             return {"conversations": items}
+
+
+def check_images(images):
+    """(images, problem) for the pictures sent with a request: at most MAX_IMAGES, each a supported
+    type and within the API's size limit."""
+    if not images:
+        return [], None
+    if not isinstance(images, list) or len(images) > MAX_IMAGES:
+        return [], "Attach up to %d images at a time." % MAX_IMAGES
+    out = []
+    for i in images:
+        if not isinstance(i, dict) or i.get("media_type") not in IMAGE_TYPES or not isinstance(i.get("data"), str):
+            return [], "That image type isn't supported. Use PNG, JPEG, GIF or WebP."
+        if len(i["data"]) * 3 // 4 > MAX_IMAGE_BYTES:
+            return [], "One of the images is larger than 5 MB."
+        out.append({"media_type": i["media_type"], "data": i["data"]})
+    return out, None
 
 
 def conversation_prompt(context_text, history, instruction):

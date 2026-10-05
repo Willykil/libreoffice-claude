@@ -43,6 +43,7 @@ const TONE_TIPS = {
 
 let state = { doc: null, quick: [], connection: "subscription", models: [], efforts: [], voice: {} };
 let busy = false;
+let pendingImages = [];    // screenshots waiting to be sent: { media_type, data (base64), url }
 let chat = newChat();      // the conversation on screen; saved to history after each reply
 
 function newChat() {
@@ -278,11 +279,24 @@ function richText(text) {
 
 /* ---------------------------------------------------------------- conversation */
 
-function addUser(text) {
+// images: the pictures' URLs while they're on screen, or how many there were (in saved chats).
+function addUser(text, images) {
   $("welcome").hidden = true;
   document.querySelector(".app").classList.add("chatting");
   const m = el("div", "msg user");
-  m.appendChild(el("div", "bubble", text));
+  if (Array.isArray(images) && images.length) {
+    const row = el("div", "sent-images");
+    for (const url of images) {
+      const img = el("img");
+      img.src = url;
+      img.alt = "Attached image";
+      row.appendChild(img);
+    }
+    m.appendChild(row);
+  } else if (images > 0) {
+    m.appendChild(el("div", "image-note", images === 1 ? "1 image attached" : images + " images attached"));
+  }
+  if (text) m.appendChild(el("div", "bubble", text));
   thread.appendChild(m);
   scrollDown();
 }
@@ -580,10 +594,12 @@ function historyForApi() {
   return chat.messages.map((m) => ({ role: m.role, text: m.history_text || m.text }));
 }
 
-async function ask(body, shownText) {
+async function ask(body, shownText, images) {
   if (busy) return;
   togglePopover(false);
-  addUser(shownText || body.instruction);
+  images = images || [];
+  addUser(shownText || body.instruction, images.map((i) => i.url));
+  if (images.length) body.images = images.map((i) => ({ media_type: i.media_type, data: i.data }));
   busy = true;
   renderState();
   const thinking = addThinking();
@@ -602,12 +618,15 @@ async function ask(body, shownText) {
   } else if (res.error) {
     addError(res.error, res);
   } else {
-    const shown = shownText || body.instruction;
+    const shown = shownText || body.instruction || "";
     res.tone = body.tone || "";
-    chat.messages.push({ role: "user", text: body.instruction || shown, shown },
+    // The pictures themselves aren't kept: later turns and saved chats only note that they were there.
+    const sent = images.length ? " [" + images.length + " image" + (images.length === 1 ? "" : "s") + " attached]" : "";
+    chat.messages.push({ role: "user", text: (body.instruction || shown) + sent, shown, images: images.length },
                        Object.assign({ role: "assistant" }, res));
     if (!chat.title) {
-      chat.title = shown.length > 80 ? shown.slice(0, 77) + "…" : shown;
+      const title = shown || (images.length === 1 ? "Image" : "Images");
+      chat.title = title.length > 80 ? title.slice(0, 77) + "…" : title;
       chat.doc = state.doc ? state.doc.title : "";
       chat.kind = res.kind;
     }
@@ -666,7 +685,7 @@ function updateSend() {
   sendBtn.replaceChildren(icon(busy ? "stop" : "send"));
   sendBtn.setAttribute("aria-label", busy ? "Stop" : "Send");
   sendBtn.title = busy ? "Stop Claude" : "Send (Enter)";
-  sendBtn.disabled = !busy && !promptBox.value.trim();
+  sendBtn.disabled = !busy && !promptBox.value.trim() && !pendingImages.length;
 }
 
 function autosize() {
@@ -686,11 +705,16 @@ $("askForm").addEventListener("submit", (e) => {
   e.preventDefault();
   if (busy) { api("/api/cancel", {}); return; }
   const text = promptBox.value.trim();
-  if (!text) return;
+  if (!text && !pendingImages.length) return;
+  const images = pendingImages;
+  pendingImages = [];
+  renderAttachments();
   promptBox.value = "";
   autosize();
   const v = state.voice || {};
-  ask(isWriter() && v.default && v.ready ? { instruction: text, tone: "voice" } : { instruction: text });
+  // My voice rewrites the selection; a message with pictures is a question about them.
+  ask(isWriter() && v.default && v.ready && !images.length ? { instruction: text, tone: "voice" }
+                                                           : { instruction: text }, text, images);
 });
 
 function showChat(c) {
@@ -699,7 +723,7 @@ function showChat(c) {
   $("welcome").hidden = c.messages.length > 0;
   document.querySelector(".app").classList.toggle("chatting", c.messages.length > 0);
   for (const m of c.messages) {
-    if (m.role === "user") addUser(m.shown || m.text);
+    if (m.role === "user") addUser(m.shown || m.text, m.images || 0);
     else addReply(m);
   }
 }
@@ -934,6 +958,98 @@ $("cancelSettings").addEventListener("click", closeSheets);
 $("scrim").addEventListener("click", closeSheets);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { closeSheets(); togglePopover(false); }
+});
+
+/* ---------------------------------------------------------------- screenshots */
+
+const MAX_IMAGES = 5;
+const MAX_EDGE = 1568;                 // Claude scales larger pictures down to about this anyway
+const MAX_BYTES = 3.5 * 1024 * 1024;   // well under the 5 MB the API takes per picture
+
+function renderAttachments() {
+  const box = $("attachments");
+  box.hidden = !pendingImages.length;
+  box.replaceChildren(...pendingImages.map((img, i) => {
+    const t = el("div", "thumb");
+    const pic = el("img");
+    pic.src = img.url;
+    pic.alt = "Image to send";
+    const x = el("button", "remove");
+    x.type = "button";
+    x.title = "Don't send this image";
+    x.setAttribute("aria-label", "Remove image");
+    x.appendChild(icon("x"));
+    x.addEventListener("click", () => { pendingImages.splice(i, 1); renderAttachments(); promptBox.focus(); });
+    t.append(pic, x);
+    return t;
+  }));
+  updateSend();
+}
+
+function canvasBlob(canvas, type, quality) {
+  return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+}
+
+function dataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
+// Shrinks big pictures so they upload quickly and stay within the API's limits. PNG keeps
+// screenshot text crisp; a photo too big as PNG goes as JPEG instead.
+async function prepareImage(file) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+  let blob = file;
+  if (scale < 1 || file.size > MAX_BYTES || !/^image\/(png|jpeg|gif|webp)$/.test(file.type)) {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    blob = await canvasBlob(canvas, "image/png");
+    if (blob.size > MAX_BYTES) blob = await canvasBlob(canvas, "image/jpeg", 0.88);
+  }
+  bitmap.close();
+  const url = await dataUrl(blob);
+  return { media_type: blob.type, data: url.slice(url.indexOf(",") + 1), url };
+}
+
+async function addImages(files) {
+  const images = [...files].filter((f) => f.type.startsWith("image/"));
+  if (!images.length) return false;
+  for (const f of images) {
+    if (pendingImages.length >= MAX_IMAGES) { toast("Up to " + MAX_IMAGES + " images per message", true); break; }
+    try { pendingImages.push(await prepareImage(f)); } catch (e) { toast("Couldn't read that image", true); }
+  }
+  renderAttachments();
+  promptBox.focus();
+  return true;
+}
+
+$("attach").addEventListener("click", () => $("imageInput").click());
+$("imageInput").addEventListener("change", (e) => { addImages(e.target.files); e.target.value = ""; });
+document.addEventListener("paste", (e) => {
+  if (!$("settings").hidden || !$("voice").hidden) return;      // pasting a key or a profile there
+  const files = [...(e.clipboardData ? e.clipboardData.files : [])];
+  if (files.some((f) => f.type.startsWith("image/"))) {
+    e.preventDefault();
+    addImages(files);
+  }
+});
+const askBox = $("askForm");
+askBox.addEventListener("dragover", (e) => {
+  if ([...e.dataTransfer.items].some((i) => i.kind === "file")) { e.preventDefault(); askBox.classList.add("dropping"); }
+});
+askBox.addEventListener("dragleave", () => askBox.classList.remove("dropping"));
+askBox.addEventListener("drop", (e) => {
+  askBox.classList.remove("dropping");
+  if (!e.dataTransfer.files.length) return;
+  e.preventDefault();
+  addImages(e.dataTransfer.files);
 });
 
 /* ---------------------------------------------------------------- hover help */

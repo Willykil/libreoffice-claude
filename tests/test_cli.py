@@ -62,6 +62,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual(argv[argv.index("--effort") + 1], "medium")
         self.assertEqual(os.path.realpath(call["cwd"]), os.path.realpath(tempfile.gettempdir()))
 
+    def test_images_go_as_a_json_message(self):
+        image = {"media_type": "image/png", "data": "iVBORw0KGgo="}
+        claude_api.ask(self.settings, "s", "what is this?", images=[image])
+        call = self.logged()
+        argv = call["argv"]
+        self.assertEqual(argv[argv.index("--input-format") + 1], "stream-json")
+        message = json.loads(call["stdin"])
+        self.assertEqual(message["type"], "user")
+        self.assertEqual(message["message"]["content"], [
+            {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}},
+            {"type": "text", "text": "what is this?"}])
+
+    def test_plain_text_without_images(self):
+        claude_api.ask(self.settings, "s", "u")
+        self.assertNotIn("--input-format", self.logged()["argv"])
+
     def test_model_passed_through(self):
         claude_api.ask(dict(self.settings, model="claude-sonnet-5-5", effort=""), "s", "u")
         argv = self.logged()["argv"]

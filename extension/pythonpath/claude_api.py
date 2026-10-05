@@ -87,13 +87,13 @@ def resolve_api_key(settings):
     return (settings.get("api_key") or "").strip() or os.environ.get("ANTHROPIC_API_KEY", "").strip()
 
 
-def build_request(settings, system, user_text):
+def build_request(settings, system, user_text, images=None):
     model = settings.get("model") or API_DEFAULT_MODEL
     body = {
         "model": model,
         "max_tokens": int(settings.get("max_tokens") or DEFAULT_SETTINGS["max_tokens"]),
         "system": system,
-        "messages": [{"role": "user", "content": user_text}],
+        "messages": [{"role": "user", "content": user_content(user_text, images)}],
     }
     headers = {
         "content-type": "application/json",
@@ -108,6 +108,14 @@ def build_request(settings, system, user_text):
     return body, headers
 
 
+def user_content(text, images):
+    """The message: plain text, or the pictures followed by the text."""
+    if not images:
+        return text
+    return [{"type": "image", "source": {"type": "base64", "media_type": i["media_type"], "data": i["data"]}}
+            for i in images] + [{"type": "text", "text": text}]
+
+
 def parse_response(data):
     """Return (text, truncated) from a Messages API response body."""
     if data.get("stop_reason") == "refusal":
@@ -118,25 +126,26 @@ def parse_response(data):
     return text.strip(), data.get("stop_reason") == "max_tokens"
 
 
-def ask(settings, system, user_text, cancel=None):
+def ask(settings, system, user_text, cancel=None, images=None):
     """Ask through whichever connection is configured. Returns (text, truncated).
 
     cancel: optional threading.Event; Claude Code requests are stopped when it is set.
+    images: optional [{"media_type": "image/png", "data": base64}] sent along, such as screenshots.
     """
     if settings.get("backend") == API:
-        return ask_api(settings, system, user_text)
+        return ask_api(settings, system, user_text, images)
     import claude_cli
-    return claude_cli.ask(settings, system, user_text, cancel)
+    return claude_cli.ask(settings, system, user_text, cancel, images)
 
 
-def ask_api(settings, system, user_text):
+def ask_api(settings, system, user_text, images=None):
     """Send one message to the Messages API. Returns (text, truncated). Raises ClaudeError."""
     key = resolve_api_key(settings)
     if not key:
         raise ClaudeError("No API key set. Open Claude > Settings and paste your Anthropic API key "
                           "(from console.anthropic.com), set ANTHROPIC_API_KEY, or switch the "
                           "connection to Claude Code to use your Claude subscription.")
-    body, headers = build_request(settings, system, user_text)
+    body, headers = build_request(settings, system, user_text, images)
     headers["x-api-key"] = key
     url = (settings.get("base_url") or DEFAULT_SETTINGS["base_url"]).rstrip("/") + "/v1/messages"
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
