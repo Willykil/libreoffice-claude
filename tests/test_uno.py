@@ -454,7 +454,7 @@ class UnoTest(unittest.TestCase):
         table.getCellByName("A1").setString("Qty")
         table.getCellByName("B2").setString("42")
         self.api("/api/ask", {"action": "summarize"})
-        self.assertIn("<document>\n[P1] Intro text\n[P2] (table)\nQty\t\n\t42", self.last_prompt())
+        self.assertIn("<document>\n[P1] Intro text\n[P2] (table)\nA1: Qty | B1: (empty)\nA2: (empty) | B2: 42", self.last_prompt())
         self.assertIn("Nothing is selected.", self.last_prompt())
 
     def test_comments_and_tracked_changes_are_read(self):
@@ -835,6 +835,93 @@ class UnoTest(unittest.TestCase):
             looks.append((p.CharFontName, p.CharHeight, p.CharBackColor, p.CharWeight))
         self.assertEqual(looks, [("Arial Narrow", 10.0, -1, 150.0), ("Arial Narrow", 10.0, -1, 100.0),
                                  ("Arial Narrow", 10.0, -1, 100.0), ("Verdana", 14.0, 0xC0C0C0, 100.0)])
+
+    def writer_form(self, blank_under=False):
+        """A worksheet: a question, a table with a header row and blank cells, the next question."""
+        doc = self.open("swriter")
+        text = doc.getText()
+        cur = text.createTextCursor()
+        text.insertString(cur, "Objectif de communication :", False)
+        table = doc.createInstance("com.sun.star.text.TextTable")
+        table.initialize(2, 3)
+        text.insertTextContent(text.getEnd(), table, False)
+        for name, head in zip(("A1", "B1", "C1"), ("Intention", "Récepteur", "Idée directrice")):
+            table.getCellByName(name).setString(head)
+        cur = text.createTextCursorByRange(text.getEnd())
+        if blank_under:
+            text.insertControlCharacter(cur, 0, False)
+        text.insertString(cur, "K. Justification :", False)
+        return doc, table
+
+    def elements(self, doc):
+        out, e = [], doc.getText().createEnumeration()
+        while e.hasMoreElements():
+            el = e.nextElement()
+            out.append("(table)" if el.supportsService("com.sun.star.text.TextTable") else el.getString())
+        return out
+
+    def test_writer_edits_fill_table_cells_and_write_beside_tables(self):
+        doc, table = self.writer_form()
+        e = doc.getText().createEnumeration()
+        for _ in range(3):
+            question = e.nextElement()
+        question.NumberingStyleName, question.CharWeight = "Numbering 123", 150.0
+        self.api("/api/ask", {"action": "summarize"})
+        self.assertIn("[P2] (table)\nA1: Intention | B1: Récepteur | C1: Idée directrice\n"
+                      "A2: (empty) | B2: (empty) | C2: (empty)", self.last_prompt())
+        self.mock.text(self.edits("Fait.", [
+            {"op": "fill", "para": 2, "cells": {"A2": "Informer", "b2": "Mes camarades", "C2": "Un\nDeux"}},
+            {"op": "format", "para": 2, "cell": "A2", "bold": True},
+            {"op": "insert", "para": 2, "text": "Sous le tableau."},
+            {"op": "insert", "para": 2, "position": "before", "text": "Avant le tableau."},
+            {"op": "replace", "para": 2, "cell": "B2", "find": "camarades", "with": "collègues"},
+            {"op": "fill", "para": 2, "cells": {"Z9": "nope"}},
+            {"op": "fill", "para": 1, "cells": {"A1": "nope"}}]))
+        res = self.api("/api/ask", {"instruction": "Remplis le tableau"})
+        self.assertEqual(len(res["edits"]["done"]), 5, res["edits"])
+        self.assertIn("no cell Z9", res["edits"]["failed"][0])
+        self.assertIn("table's number", res["edits"]["failed"][1])
+        self.assertEqual(table.getCellByName("A2").getString(), "Informer")
+        self.assertEqual(table.getCellByName("B2").getString(), "Mes collègues")
+        self.assertEqual(table.getCellByName("C2").getString(), "Un\nDeux")
+        self.assertEqual(table.getCellByName("A2").createTextCursor().CharWeight, 150.0)
+        self.assertEqual(table.getCellByName("B1").getString(), "Récepteur")
+        self.assertEqual(self.elements(doc), ["Objectif de communication :", "Avant le tableau.", "(table)",
+                                              "Sous le tableau.", "K. Justification :"])
+        e = doc.getText().createEnumeration()
+        looks = []
+        while e.hasMoreElements():
+            p = e.nextElement()
+            if not p.supportsService("com.sun.star.text.TextTable"):
+                looks.append((p.getString(), p.NumberingStyleName, p.CharWeight))
+        self.assertEqual(looks[2:], [("Sous le tableau.", "", 100.0),
+                                     ("K. Justification :", "Numbering 123", 150.0)])
+        self.assertEqual(self.api("/api/undo", {}), {"ok": True})
+        self.assertEqual(table.getCellByName("A2").getString(), "")
+        self.assertEqual(self.elements(doc), ["Objectif de communication :", "(table)", "K. Justification :"])
+
+    def test_writer_insert_under_a_table_keeps_its_blank_line_below(self):
+        doc, table = self.writer_form(blank_under=True)
+        self.mock.text(self.edits("Fait.", [{"op": "insert", "para": 2, "text": "Sous le tableau."}]))
+        self.assertEqual(self.api("/api/ask", {"instruction": "x"})["edits"]["failed"], [])
+        self.assertEqual(self.elements(doc), ["Objectif de communication :", "(table)", "Sous le tableau.", "",
+                                              "K. Justification :"])
+
+    def test_writer_table_edits_follow_tracked_changes(self):
+        doc, table = self.writer_form()
+        self.api("/api/settings", {"track_changes": True})
+        self.mock.text(self.edits("Fait.", [{"op": "fill", "para": 2, "cells": {"A2": "Informer"}},
+                                            {"op": "insert", "para": 2, "text": "Sous le tableau."}]))
+        res = self.api("/api/ask", {"instruction": "Remplis"})
+        self.assertEqual(res["edits"]["failed"], [])
+        self.assertEqual(table.getCellByName("A2").getString(), "Informer")
+        self.assertEqual(self.elements(doc), ["Objectif de communication :", "(table)", "Sous le tableau.",
+                                              "K. Justification :"])
+        types = []
+        e = doc.getRedlines().createEnumeration()
+        while e.hasMoreElements():
+            types.append(e.nextElement().getPropertyValue("RedlineType"))
+        self.assertGreaterEqual(types.count("Insert"), 2, types)
 
     def test_unreadable_edits_change_nothing(self):
         doc = self.writer_essay()

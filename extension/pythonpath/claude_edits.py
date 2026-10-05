@@ -23,12 +23,15 @@ Each operation picks its target with one of:
 - "para": 12 (the paragraph marked [P12]) or "para": [12, 15] (paragraphs 12 to 15)
 - "find": "exact text" or a list of them, copied exactly from the document, each within one paragraph; add "para" to search only there (recommended), and "occurrence": 2 to take only the 2nd match (default: every match)
 - "selection": true (the user's selection)
+- "para": 12, "cell": "B2" (a cell of the table marked [P12]; tables are shown cell by cell, like "B2: (empty)")
 Operations:
 - {"op": "format", <target>, "bold": true, "italic": true, "underline": true | "double" | "wave" | false, "strikethrough": true, "highlight": "yellow" | "green" | "cyan" | "pink" | "orange" | "#RRGGBB" | "none", "color": "red" | "#RRGGBB" | "auto", "font": "Arial", "size": 12, "align": "left" | "center" | "right" | "justify", "style": "Heading 1"} (any of these)
 - {"op": "replace", <target>, "with": "new text"} (corrections, find and replace)
 - {"op": "insert", <target>, "text": "...", "position": "after" | "before"} (after or before whole paragraphs adds new paragraphs; after found text inserts inline). "at": "end" or "start" instead of a target adds paragraphs at the end or start of the document. Separate paragraphs with \\n; "style" sets their paragraph style.
 - {"op": "delete", <target>} (a whole paragraph target removes the paragraph)
 - {"op": "comment", <target>, "text": "the comment"}
+- {"op": "fill", "para": 12, "cells": {"A2": "text", "B2": "line 1\\nline 2"}} (sets the text of table cells, empty or not: use it to answer in a table's blank cells, never put the answer under the table instead)
+Inserting "after" or "before" a table's "para" adds paragraphs right after or before the table.
 Example:
 <edits>
 [{"op": "format", "para": 4, "find": ["la mémoire de travail", "surcharge"], "highlight": "yellow"},
@@ -145,15 +148,26 @@ def _para_label(para):
     return "¶%s" % para
 
 
+def _cell_names(op):
+    cells = op.get("cell")
+    return [str(c).strip().upper() for c in (cells if isinstance(cells, list) else [cells])] if cells else []
+
+
 def _target_label(op):
     finds = op.get("find")
     where = " in " + _para_label(op["para"]) if op.get("para") is not None else ""
+    cells = _cell_names(op)
+    if cells:
+        where = " in cell%s %s of %s" % ("s" if len(cells) > 1 else "", ", ".join(cells),
+                                         _para_label(op.get("para")))
     if finds:
         finds = finds if isinstance(finds, list) else [finds]
         what = ", ".join("“%s”" % _short(f, 30) for f in finds[:3])
         if len(finds) > 3:
             what += " +%d more" % (len(finds) - 3)
         return what + where
+    if cells:
+        return where[4:]
     if op.get("para") is not None:
         return _para_label(op["para"])
     if op.get("selection"):
@@ -357,6 +371,28 @@ class _Writer:
     def _is_table(self, el):
         return el.supportsService("com.sun.star.text.TextTable")
 
+    def _table_of(self, op):
+        numbers = self._para_numbers(op)
+        if not numbers or len(numbers) != 1 or not self._is_table(self.paras[numbers[0]]):
+            raise EditError("%s: a \"cell\" needs \"para\" set to the table's number"
+                            % str(op.get("op")).capitalize())
+        return self.paras[numbers[0]]
+
+    def _cell(self, table, name):
+        try:
+            cell = table.getCellByName(str(name).strip().upper())
+        except Exception:
+            cell = None
+        if cell is None:
+            raise EditError("The table has no cell %s" % name)
+        return cell
+
+    def _cell_range(self, cell):
+        cur = cell.createTextCursor()
+        cur.gotoStart(False)
+        cur.gotoEnd(True)
+        return cur
+
     def _para_range(self, el):
         """A text cursor over a whole paragraph, or one per cell for a table."""
         if self._is_table(el):
@@ -423,12 +459,18 @@ class _Writer:
         label = _target_label(op)
         numbers = self._para_numbers(op)
         scope = [self.paras[n] for n in numbers] if numbers else None
+        cells = None
+        if op.get("cell"):
+            table = self._table_of(op)
+            cells = [self._cell(table, name) for name in _cell_names(op)]
         finds = op.get("find")
         if finds:
             finds = finds if isinstance(finds, list) else [finds]
             ranges, missing = [], []
             for f in finds:
                 hits = self._find(f, scope)
+                if cells:
+                    hits = [h for h in hits if any(h.getText() == c for c in cells)]
                 occ = op.get("occurrence")
                 if hits and isinstance(occ, int) and not isinstance(occ, bool):
                     hits = hits[occ - 1:occ] if 1 <= occ <= len(hits) else []
@@ -437,12 +479,14 @@ class _Writer:
                 else:
                     missing.append(f)
             if missing and not ranges:
-                where = " in " + _para_label(op["para"]) if numbers else ""
+                where = " in " + label.rsplit(" in ", 1)[1] if numbers else ""
                 raise EditError("Couldn't find %s%s" % (", ".join("“%s”" % _short(f) for f in missing),
                                                        where))
             if missing:
                 label += " (not found: %s)" % ", ".join("“%s”" % _short(f, 30) for f in missing)
             return ranges, label, False
+        if cells:
+            return [self._cell_range(c) for c in cells], label, False
         if numbers:
             return [r for n in numbers for r in self._para_range(self.paras[n])], label, True
         if op.get("selection"):
@@ -547,8 +591,9 @@ class _Writer:
 
     def _neighbour(self, el, step):
         els = self._elements()
+        table = el.getName() if self._is_table(el) else None
         for i, e in enumerate(els):
-            if e == el:
+            if e == el or (table and self._is_table(e) and e.getName() == table):
                 j = i + step
                 return els[j] if 0 <= j < len(els) else None
         return None
@@ -632,8 +677,8 @@ class _Writer:
             numbers = self._para_numbers(op)
             el = self.paras[numbers[0] if before else numbers[-1]]
             if self._is_table(el):
-                raise EditError("Insert: can't add paragraphs next to a table yet")
-            if before:
+                self._beside_table(el, text, style, before)
+            elif before:
                 cur = el.getText().createTextCursorByRange(el.getStart())
                 self._new_paragraphs(cur, text, style, True)
             else:
@@ -646,6 +691,58 @@ class _Writer:
         cur = rng.getText().createTextCursorByRange(rng.getStart() if before else rng.getEnd())
         self._write(cur, text, style)
         return "Inserted \u201c%s\u201d %s %s" % (_short(text), "before" if before else "after", label)
+
+    def _beside_table(self, table, text, style, before):
+        """New paragraphs right before or after a table, written in the paragraph next to it."""
+        near = self._neighbour(table, -1 if before else 1)
+        if near is None or self._is_table(near):
+            raise EditError("Insert: there's no paragraph %s this table to write next to"
+                            % ("before" if before else "after"))
+        body = near.getText()
+        if before:
+            # as if the user pressed Enter at the end of the paragraph above the table
+            self._new_paragraphs(self._break_at_end(near), text, style or self._follow_style(near), False)
+            return
+        self._new_paragraphs(body.createTextCursorByRange(near.getStart()), text, style, True)
+        if near.getString() == "" or style:
+            return        # under the table's blank line, which stays below the new paragraphs
+        # Text right under the table (often the next question, numbered or bold): the new
+        # paragraphs mustn't take its look, so they get the plain look of the text above the table.
+        cur = body.createTextCursorByRange(near.getStart())
+        cur.goLeft(1, False)
+        cur.gotoStartOfParagraph(True)
+        for _ in range(str(text).count("\n")):
+            cur.goLeft(1, True)
+            cur.gotoStartOfParagraph(True)
+        above = self._neighbour(table, -1)
+        try:
+            look = above.getPropertyValue("ParaStyleName") if above is not None and not self._is_table(above) \
+                else "Standard"
+            cur.setAllPropertiesToDefault()
+            cur.setPropertyValue("ParaStyleName", look)
+            cur.setPropertyValue("NumberingStyleName", "")
+        except Exception:
+            pass          # the text is in; only its look is off
+
+    def op_fill(self, op):
+        cells = op.get("cells")
+        if cells is None and op.get("cell") and "text" in op:
+            cells = {op["cell"]: op["text"]}
+        if isinstance(cells, list):      # [{"cell": "A2", "text": "..."}]
+            cells = {c.get("cell"): c.get("text", "") for c in cells if isinstance(c, dict)}
+        if not isinstance(cells, dict) or not cells:
+            raise EditError("Fill: no \"cells\" given")
+        table = self._table_of(op)
+        found = [(str(n).strip().upper(), self._cell(table, n), "" if t is None else str(t))
+                 for n, t in cells.items()]      # a bad cell name fails before anything changes
+        for _, cell, text in found:
+            cur = self._cell_range(cell)
+            if cur.getString():
+                cur.setString("")
+            self._write(cur, text)
+        names = [n for n, _, _ in found]
+        what = ", ".join(names[:6]) + (" +%d more" % (len(names) - 6) if len(names) > 6 else "")
+        return "Filled cell%s %s of %s" % ("s" if len(names) > 1 else "", what, _para_label(op.get("para")))
 
     def _follow_style(self, el):
         """The style Writer gives the paragraph after a heading (Text Body), or None when that's

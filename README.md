@@ -26,7 +26,7 @@ or the whole document / the sheet's filled area when nothing is selected) and of
   Ctrl+Z once) takes all of them back; with *Edits as tracked changes* on, Writer records them as
   changes to accept or reject. Writer: bold, italic, underline, strikethrough, highlight, text
   color, font, size, alignment, paragraph styles, find and replace, inserting and deleting
-  paragraphs, comments. Calc: values and formulas, bold/italic/underline, text and fill colors,
+  paragraphs (also next to tables), filling in table cells, comments. Calc: values and formulas, bold/italic/underline, text and fill colors,
   number formats, alignment, wrapping, borders, comments, clearing cells, inserting and deleting
   rows and columns.
 - **Rewrite as Formal | My voice** (Writer) - one click rewrites the selection formally, or the
