@@ -138,7 +138,9 @@ function renderState() {
   $("tone").hidden = !isWriter();
   const voice = state.voice || {};
   for (const b of document.querySelectorAll(".tone-btn")) {
-    b.disabled = busy || !hasSelection();
+    b.disabled = busy;
+    b.classList.toggle("needs-selection", !hasSelection());
+    b.setAttribute("aria-disabled", String(busy || !hasSelection()));
     b.title = hasSelection() ? TONE_TIPS[b.dataset.tone] : "Select the text to rewrite first";
     b.classList.toggle("default", b.dataset.tone === "voice" && !!voice.default && !!voice.ready);
   }
@@ -160,9 +162,15 @@ function renderState() {
     chips.replaceChildren(...state.quick.map((q) => {
       const c = el("button", "chip", q.label);
       c.type = "button";
-      c.disabled = busy || (q.needs_selection && !hasSelection());
-      c.title = q.needs_selection && !hasSelection() ? "Select some text first" : (q.hint || "");
-      c.addEventListener("click", () => ask({ instruction: q.prompt }, q.label));
+      const waiting = q.needs_selection && !hasSelection();
+      c.disabled = busy;
+      c.classList.toggle("needs-selection", waiting);
+      c.setAttribute("aria-disabled", String(busy || waiting));
+      c.title = waiting ? "Select some text first" : (q.hint || "");
+      c.addEventListener("click", () => {
+        if (waiting) return toast("Select some text in the document first, then pick " + q.label, true);
+        ask({ instruction: q.prompt }, q.label);
+      });
       return c;
     }));
   }
@@ -668,6 +676,7 @@ async function ask(body, shownText, images) {
 }
 
 function rewrite(tone) {
+  if (!hasSelection()) return toast("Select the text to rewrite first", true);
   if (tone === "voice" && !(state.voice && state.voice.ready)) {
     openVoice();
     toast("Add some of your own writing first, then let Claude learn it", true);
