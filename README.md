@@ -56,6 +56,12 @@ or the whole document / the sheet's filled area when nothing is selected) and of
   written into the slides yet (LibreOffice can't undo edits made that way).
 - **Calc** replies are previewed as a grid (`=` values become live formulas); *Write below* /
   *Write at selection*, with a warning before overwriting cells that have content.
+- **Usage** (gauge icon, or click the line under the message box) - with your Claude subscription:
+  how much of the current 5-hour session and the weekly limits you've used, when each resets, any
+  per-model weekly limit and extra usage spend, the same numbers as the Claude app (asked of Claude Code,
+  which costs nothing against your plan; needs a recent Claude Code, `claude update`). With an API key:
+  requests and tokens left this minute, and this session's tokens with an estimated cost; your balance
+  and monthly spend stay on console.anthropic.com, since an API key can't read them. Full panel only.
 - **Past conversations** (clock icon), kept on this computer only; clear them in Settings.
 - **Settings** (gear): connection, *Your writing voice*, and standing instructions for Writer,
   Calc, Impress and Draw.
@@ -135,6 +141,8 @@ extension/                 the .oxt contents
   pythonpath/claude_sidebar.py   the sidebar panel; its simple version from LibreOffice controls
   pythonpath/claude_embed.py     Windows: places the full panel (an Edge window) inside the sidebar
   pythonpath/claude_actions.py   prompts and quick actions
+  pythonpath/claude_usage.py     the Usage sheet: plan limits through Claude Code's get_usage,
+                                 API rate-limit headers, this session's tokens
   pythonpath/claude_voice.py     My voice: samples, learning, the voice in rewrites
   pythonpath/claude_dialogs.py   the one native message box (if the panel can't open)
 build.py                   zips extension/ into claude-for-libreoffice.oxt; writes update.xml

@@ -29,6 +29,7 @@ import claude_actions
 import claude_api
 import claude_edits
 import claude_office
+import claude_usage
 import claude_voice
 
 PANEL_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "panel"))
@@ -59,6 +60,8 @@ class PanelServer:
         self._lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._last_state = None
+        self._usage_lock = threading.Lock()
+        self._usage_cache = None        # (time, Claude Code plan usage)
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), _handler(self))
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
@@ -382,6 +385,24 @@ class PanelServer:
             return {"error": "Couldn't find %s in the document." % body.get("ref")}
         return {"ok": True}
 
+    # ------------------------------------------------------------ usage
+
+    USAGE_CACHE = 60       # seconds: Claude Code's plan usage is asked for at most this often
+
+    def usage(self, fresh=False):
+        settings = claude_api.load_settings(self.settings_path)
+        if settings.get("backend") == claude_api.API:
+            return claude_usage.api_snapshot()
+        with self._usage_lock:
+            cached = self._usage_cache
+            if cached and not fresh and time.time() - cached[0] < self.USAGE_CACHE:
+                out = dict(cached[1], session=claude_usage.session())
+            else:
+                out = claude_usage.cli_snapshot(settings)
+                out["at"] = time.time()
+                self._usage_cache = (time.time(), out)
+        return out
+
     # Settings the panel edits. Model, effort and tracked changes also change from the composer.
     _TEXT_KEYS = ("backend", "model", "effort", "claude_path")
     _FREE_TEXT_KEYS = ("instructions_writer", "instructions_calc", "instructions_impress", "instructions_draw")
@@ -551,6 +572,8 @@ def _handler(panel):
                 return self._send(200, panel.state())
             if path == "/api/settings":
                 return self._send(200, panel.get_settings())
+            if path == "/api/usage":
+                return self._send(200, panel.usage("fresh=1" in (urlparse(self.path).query or "")))
             self._send(404, {"error": "not found"})
 
         def do_POST(self):

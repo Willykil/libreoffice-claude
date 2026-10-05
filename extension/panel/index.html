@@ -42,6 +42,7 @@
         <span>Claude</span>
       </div>
       <div class="top-actions">
+        <button class="icon-btn" id="openUsage" type="button" title="Usage: how much of your plan&#39;s limits you have used and when they reset" aria-label="Usage"><svg><use href="#i-gauge"/></svg></button>
         <button class="icon-btn" id="openHistory" type="button" title="Past conversations: reopen or delete an earlier chat" aria-label="Past conversations"><svg><use href="#i-history"/></svg></button>
         <button class="icon-btn" id="newChat" type="button" title="Start a new conversation. This one stays in Past conversations." aria-label="New conversation"><svg><use href="#i-new"/></svg></button>
         <button class="icon-btn" id="openSettings" type="button" title="Settings: how to connect, standing instructions, your writing voice" aria-label="Settings"><svg><use href="#i-gear"/></svg></button>
@@ -89,7 +90,7 @@
           <button class="send" id="send" type="submit" aria-label="Send" title="Send (Enter)" disabled><svg><use href="#i-send"/></svg></button>
         </div>
       </form>
-      <div class="footnote" id="connection" title="How this panel reaches Claude. Change it in Settings."></div>
+      <button type="button" class="footnote" id="connection" title="How this panel reaches Claude, and how much of your usage is left. Click for details."></button>
 
       <div class="popover" id="popover" role="dialog" aria-label="Model and effort" hidden>
         <div class="pop-label" title="Bigger models are more careful, smaller ones are faster">Model</div>
@@ -185,6 +186,15 @@
         <button class="btn primary" type="submit">Save</button>
       </div>
     </form>
+  </aside>
+
+  <aside class="sheet" id="usage" aria-label="Usage" hidden>
+    <div class="sheet-head">
+      <h2>Usage</h2>
+      <button class="icon-btn" id="refreshUsage" type="button" title="Check again now" aria-label="Refresh"><svg><use href="#i-history"/></svg></button>
+      <button class="icon-btn" id="closeUsage" type="button" aria-label="Close"><svg><use href="#i-close"/></svg></button>
+    </div>
+    <div class="sheet-body" id="usageBody"></div>
   </aside>
 
   <aside class="sheet" id="history" aria-label="Past conversations" hidden>

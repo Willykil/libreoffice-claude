@@ -147,7 +147,13 @@ def ask(settings, system, user_text, cancel=None, images=None):
             os.remove(system_file)
         except OSError:
             pass
-    return parse_output(proc.returncode, stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace"))
+    out = stdout.decode("utf-8", "replace")
+    try:
+        import claude_usage
+        claude_usage.note_cli_output(out)
+    except Exception:      # usage is a nicety; never let it break an answer
+        pass
+    return parse_output(proc.returncode, out, stderr.decode("utf-8", "replace"))
 
 
 def _communicate(proc, data, idle, cancel, max_seconds=None):

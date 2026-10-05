@@ -10,6 +10,7 @@ class MockClaude:
         self.requests = []
         self.reply = {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
         self.status = 200
+        self.headers = {}
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -20,6 +21,8 @@ class MockClaude:
                 self.send_response(outer.status)
                 self.send_header("content-type", "application/json")
                 self.send_header("content-length", str(len(payload)))
+                for k, v in outer.headers.items():
+                    self.send_header(k, v)
                 self.end_headers()
                 self.wfile.write(payload)
 

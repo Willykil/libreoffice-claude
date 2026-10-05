@@ -3,7 +3,7 @@
 <description xmlns="http://openoffice.org/extensions/update/2006"
              xmlns:xlink="http://www.w3.org/1999/xlink">
   <identifier value="org.willykil.claude"/>
-  <version value="0.7.6"/>
+  <version value="0.7.7"/>
   <update-download>
     <src xlink:href="https://raw.githubusercontent.com/Willykil/libreoffice-claude/main/claude-for-libreoffice.oxt"/>
   </update-download>
