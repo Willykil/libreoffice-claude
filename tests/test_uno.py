@@ -812,6 +812,30 @@ class UnoTest(unittest.TestCase):
         self.assertEqual(self.char(doc, 2, "Après", "CharWeight"), [100.0])
         self.assertEqual(doc.getText().createEnumeration().nextElement().ParaStyleName, "Heading 1")
 
+    def test_inserted_paragraphs_look_like_the_one_before(self):
+        # Like pressing Enter at its end and typing, not the default style or the next paragraph's look.
+        doc = self.open("swriter")
+        text = doc.getText()
+        cur = text.createTextCursor()
+        text.insertString(cur, "Question", False)
+        text.insertControlCharacter(cur, 0, False)
+        text.insertString(cur, "Fill-in", False)
+        e = text.createEnumeration()
+        first, second = e.nextElement(), e.nextElement()
+        first.CharFontName, first.CharHeight = "Arial Narrow", 10.0
+        second.CharFontName, second.CharHeight, second.CharBackColor = "Verdana", 14.0, 0xC0C0C0
+        self.mock.text(self.edits("Fait.", [{"op": "insert", "para": 1, "text": "Un\nDeux"},
+                                            {"op": "format", "para": 1, "bold": True}]))
+        self.assertEqual(self.api("/api/ask", {"instruction": "x"})["edits"]["failed"], [])
+        self.assertEqual(self.paragraphs(doc), ["Question", "Un", "Deux", "Fill-in"])
+        e = text.createEnumeration()
+        looks = []
+        while e.hasMoreElements():
+            p = e.nextElement()
+            looks.append((p.CharFontName, p.CharHeight, p.CharBackColor, p.CharWeight))
+        self.assertEqual(looks, [("Arial Narrow", 10.0, -1, 150.0), ("Arial Narrow", 10.0, -1, 100.0),
+                                 ("Arial Narrow", 10.0, -1, 100.0), ("Verdana", 14.0, 0xC0C0C0, 100.0)])
+
     def test_unreadable_edits_change_nothing(self):
         doc = self.writer_essay()
         before = self.paragraphs(doc)

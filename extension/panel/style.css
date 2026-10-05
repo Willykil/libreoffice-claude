@@ -508,3 +508,6 @@ ins.d { text-decoration: none; background: var(--ins-bg); color: var(--ins-text)
 .strip-extra.full { color: var(--danger); font-weight: 600; }
 .strip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .strip-meter[hidden] { display: none; }
+
+/* Off-screen, for turning a copied selection into plain text. */
+.copy-scratch { position: fixed; left: -10000px; top: 0; width: 600px; white-space: pre-wrap; }

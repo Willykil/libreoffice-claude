@@ -637,13 +637,10 @@ class _Writer:
                 cur = el.getText().createTextCursorByRange(el.getStart())
                 self._new_paragraphs(cur, text, style, True)
             else:
+                # As if the user pressed Enter at its end and typed: the new paragraphs keep
+                # its look (font, size, indents), or take the style after a heading.
                 style = style or self._follow_style(el)
-                nxt = self._neighbour(el, 1)
-                if nxt is not None and not self._is_table(nxt):
-                    cur = nxt.getText().createTextCursorByRange(nxt.getStart())
-                    self._new_paragraphs(cur, text, style, True)
-                else:
-                    self._new_paragraphs(self._break_at_end(el), text, style, False)
+                self._new_paragraphs(self._break_at_end(el), text, style, False)
             return "Inserted \u201c%s\u201d %s %s" % (_short(text), "before" if before else "after", label)
         rng = ranges[0] if before else ranges[-1]
         cur = rng.getText().createTextCursorByRange(rng.getStart() if before else rng.getEnd())
@@ -651,13 +648,14 @@ class _Writer:
         return "Inserted \u201c%s\u201d %s %s" % (_short(text), "before" if before else "after", label)
 
     def _follow_style(self, el):
-        """The style Writer gives the paragraph after this one (Text Body after a heading)."""
+        """The style Writer gives the paragraph after a heading (Text Body), or None when that's
+        its own style: setting a style resets a paragraph's own formatting, so it's left alone."""
         try:
             name = el.getPropertyValue("ParaStyleName")
             follow = self.doc.getStyleFamilies().getByName("ParagraphStyles").getByName(name).FollowStyle
-            return follow or name
+            return follow if follow and follow != name else None
         except Exception:
-            return el.getPropertyValue("ParaStyleName")
+            return None
 
     def op_comment(self, op):
         text = op.get("text")
