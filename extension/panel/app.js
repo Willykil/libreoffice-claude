@@ -264,6 +264,7 @@ function richText(text) {
     frag.appendChild(document.createTextNode(text.slice(last, m.index)));
     const b = el("button", "cite", citeLabel(m[1]));
     b.type = "button";
+    b.dataset.ref = m[1];
     b.title = "Show in the document";
     b.addEventListener("click", async () => {
       const res = await api("/api/goto", { ref: m[1] });
@@ -351,9 +352,36 @@ function renderGrid(rows) {
 
 function copyButton(text) {
   return iconButton("copy", "Copy to the clipboard", async () => {
-    try { await navigator.clipboard.writeText(text); toast("Copied"); } catch (e) { toast("Couldn't copy", true); }
+    try { await navigator.clipboard.writeText(stripCites(text)); toast("Copied"); } catch (e) { toast("Couldn't copy", true); }
   });
 }
+
+// Copying from the conversation gives plain text, so a paste takes on the document's own
+// formatting instead of the panel's font, size and colors. Paragraph citations are left out.
+document.addEventListener("copy", (e) => {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !e.clipboardData) return;
+  const active = document.activeElement;
+  if (active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT")
+      && active.selectionStart !== active.selectionEnd) return;     // the message box: already plain
+  const box = el("div", "copy-scratch");
+  for (let i = 0; i < sel.rangeCount; i++) box.appendChild(sel.getRangeAt(i).cloneContents());
+  for (const b of box.querySelectorAll(".cite")) {
+    const ref = b.dataset.ref || b.textContent;
+    if (/^P\d/.test(ref)) {
+      const prev = b.previousSibling;
+      if (prev && prev.nodeType === Node.TEXT_NODE) prev.textContent = prev.textContent.replace(/\s$/, "");
+      b.remove();
+    } else {
+      b.replaceWith(b.textContent);
+    }
+  }
+  document.body.appendChild(box);
+  const text = box.innerText.replace(/\n{3,}/g, "\n\n").trim();
+  box.remove();
+  e.clipboardData.setData("text/plain", text);
+  e.preventDefault();
+});
 
 function addReply(res) {
   if (res.edits) return addEditsCard(res);
