@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 
-from claude_api import Cancelled, ClaudeError, supports_effort
+from claude_api import Cancelled, ClaudeError, content_block, supports_effort
 
 INSTALL_HELP = (
     "Claude Code isn't installed (or LibreOffice can't find it).\n\n"
@@ -107,12 +107,11 @@ def build_command(exe, settings, system_file, images=False):
 
 
 def stdin_message(user_text, images):
-    """What Claude Code reads on stdin: the plain text, or a JSON message with the pictures in it."""
+    """What Claude Code reads on stdin: the plain text, or a JSON message with the pictures and PDFs in it."""
     if not images:
         return user_text.encode("utf-8")
     import json
-    content = [{"type": "image", "source": {"type": "base64", "media_type": i["media_type"], "data": i["data"]}}
-               for i in images]
+    content = [content_block(i) for i in images]
     content.append({"type": "text", "text": user_text})
     return (json.dumps({"type": "user", "message": {"role": "user", "content": content}}) + "\n").encode("utf-8")
 

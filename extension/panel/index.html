@@ -57,6 +57,11 @@
       </div>
     </div>
 
+    <div class="drop-zone" aria-hidden="true">
+      <svg><use href="#i-image"/></svg>
+      <strong>Drop to attach</strong>
+      <span>Pictures, PDFs, documents, spreadsheets, presentations</span>
+    </div>
     <main class="thread" id="thread" aria-live="polite">
       <section class="welcome" id="welcome">
         <svg class="welcome-mark"><use href="#i-sparkle"/></svg>
@@ -76,7 +81,7 @@
       </div>
       <form class="input" id="askForm">
         <div class="attachments" id="attachments" hidden></div>
-        <textarea id="prompt" rows="1" placeholder="Ask Claude…" aria-label="Message" title="Ask about the file or describe a change. Enter sends, Shift+Enter starts a new line. Paste a screenshot with Ctrl+V to send it too."></textarea>
+        <textarea id="prompt" rows="1" placeholder="Ask Claude…" aria-label="Message" title="Ask about the file or describe a change. Enter sends, Shift+Enter starts a new line. Paste a screenshot with Ctrl+V, or drop files here, to send them too."></textarea>
         <div class="input-bar">
           <button type="button" class="selector" id="selector" title="Choose the Claude model and how long it thinks (effort)" aria-haspopup="dialog" aria-expanded="false">
             <svg class="spark"><use href="#i-sparkle"/></svg><span id="selectorLabel">Default</span><svg class="chev"><use href="#i-chev"/></svg>
@@ -85,8 +90,8 @@
             <svg><use href="#i-track"/></svg>Tracked
           </button>
           <span class="spacer"></span>
-          <button type="button" class="icon-btn attach" id="attach" title="Attach screenshots or pictures for Claude to look at. You can also paste one with Ctrl+V or drop it here." aria-label="Attach images"><svg><use href="#i-image"/></svg></button>
-          <input type="file" id="imageInput" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+          <button type="button" class="icon-btn attach" id="attach" title="Attach screenshots, pictures, PDFs or documents for Claude to look at. You can also paste with Ctrl+V or drop files anywhere on the panel." aria-label="Attach files"><svg><use href="#i-image"/></svg></button>
+          <input type="file" id="imageInput" accept="image/*,.pdf,.txt,.md,.csv,.tsv,.json,.xml,.html,.htm,.log,.yaml,.yml,.odt,.docx,.docm,.doc,.rtf,.fodt,.ott,.dotx,.wpd,.ods,.xlsx,.xlsm,.xls,.fods,.ots,.odp,.pptx,.ppt,.fodp,.otp,.odg" multiple hidden>
           <button class="send" id="send" type="submit" aria-label="Send" title="Send (Enter)" disabled><svg><use href="#i-send"/></svg></button>
         </div>
       </form>

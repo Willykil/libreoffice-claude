@@ -108,12 +108,22 @@ def build_request(settings, system, user_text, images=None):
     return body, headers
 
 
+def content_block(attachment):
+    """A picture, or a PDF, as a message content block."""
+    source = {"type": "base64", "media_type": attachment["media_type"], "data": attachment["data"]}
+    if attachment["media_type"] == "application/pdf":
+        block = {"type": "document", "source": source}
+        if attachment.get("name"):
+            block["title"] = attachment["name"]
+        return block
+    return {"type": "image", "source": source}
+
+
 def user_content(text, images):
-    """The message: plain text, or the pictures followed by the text."""
+    """The message: plain text, or the pictures and PDFs followed by the text."""
     if not images:
         return text
-    return [{"type": "image", "source": {"type": "base64", "media_type": i["media_type"], "data": i["data"]}}
-            for i in images] + [{"type": "text", "text": text}]
+    return [content_block(i) for i in images] + [{"type": "text", "text": text}]
 
 
 def parse_response(data):

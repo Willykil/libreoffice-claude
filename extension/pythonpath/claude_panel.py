@@ -42,10 +42,23 @@ STATIC = {
 PANEL_WIDTH, PANEL_HEIGHT = 440, 860
 SEEN_WINDOW = 4.0      # seconds: a panel that polled this recently counts as open
 MAX_BODY = 32 * 1024 * 1024     # a 20 MB document, base64-encoded, plus room
-MAX_IMAGES = 5                  # screenshots sent with one request
+MAX_IMAGES = 5                  # screenshots and files sent with one request, together
 MAX_IMAGE_BYTES = 5 * 1024 * 1024       # the API's limit for one image
 IMAGE_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp")
-IMAGES_ONLY = "Look at the attached image and help with what it shows, in the context of this file."
+IMAGES_ONLY = "Look at what I attached and help with it."
+MAX_FILE_BYTES = 10 * 1024 * 1024       # one attached file
+MAX_FILES_BYTES = 20 * 1024 * 1024      # all of them, so the request stays under MAX_BODY
+MAX_FILE_CHARS = 500000                 # text read from one attached file
+# Files dropped or attached in the panel: PDFs go to Claude as they are, text files as text, and
+# office files as the text LibreOffice reads from them.
+ATTACH_TEXT = (".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".html", ".htm", ".log", ".yaml", ".yml")
+ATTACH_OFFICE = (".odt", ".docx", ".doc", ".rtf", ".fodt", ".ott", ".dotx", ".docm", ".wpd",
+                 ".ods", ".xlsx", ".xls", ".xlsm", ".fods", ".ots",
+                 ".odp", ".pptx", ".ppt", ".fodp", ".otp", ".odg")
+ATTACH_PDF = ".pdf"
+FOCUS = ("Attached to this request: {what}. The request is about {it}, so answer from what {it} {shows}. The open "
+         "file above is background: use it to see where {it} {fits} (for example, which paragraphs a screenshot "
+         "shows, citing them), but don't review or summarize the rest of the file unless I ask.")
 
 
 class PanelServer:
@@ -156,7 +169,10 @@ class PanelServer:
         images, problem = check_images(body.get("images"))
         if problem:
             return {"error": problem}
-        if images and not instruction and not body.get("action") and not body.get("tone"):
+        files, problem = check_files(body.get("files"), len(images))
+        if problem:
+            return {"error": problem}
+        if (images or files) and not instruction and not body.get("action") and not body.get("tone"):
             instruction = IMAGES_ONLY
         if body.get("action") in claude_actions.PROMPTS:
             instruction = claude_actions.PROMPTS[body["action"]]
@@ -187,7 +203,19 @@ class PanelServer:
         system = claude_office.system_prompt(context.kind, settings.get("instructions_" + context.kind))
         if voice is not None:
             system += claude_voice.system_addition(voice)
-        user_text = conversation_prompt(context.text, body.get("history") or [], instruction)
+        texts = []
+        for f in files:
+            if f["name"].lower().endswith(ATTACH_PDF):
+                images.append({"media_type": "application/pdf", "data": f["data"], "name": f["name"]})
+                continue
+            text, problem = self._file_text(f["name"], f["raw"], attachment=True)
+            if problem:
+                return {"error": problem}
+            texts.append((f["name"], text))
+        context_text = context.text + attached_texts(texts)
+        if images or texts:
+            instruction += "\n\n" + focus_note(len(body.get("images") or []), [f["name"] for f in files])
+        user_text = conversation_prompt(context_text, body.get("history") or [], instruction)
         # The paragraphs as Claude sees them, so its [P12] edits land there even if the user types meanwhile.
         paragraphs = claude_office.writer_paragraphs(doc) if context.kind == claude_office.WRITER else None
 
@@ -304,14 +332,20 @@ class PanelServer:
             claude_voice.save(path, data)
         return claude_voice.summary(data)
 
-    def _file_text(self, name, raw):
-        """(text, None) or (None, reason): plain text files directly, documents through LibreOffice."""
+    def _file_text(self, name, raw, attachment=False):
+        """(text, None) or (None, reason): plain text files directly, documents through LibreOffice.
+
+        attachment: a file sent with a message, which can be any kind LibreOffice opens; otherwise a
+        sample of the user's writing for My voice, which has to be a text document."""
         ext = os.path.splitext(name)[1].lower()
-        if ext in self.TEXT_FILES:
-            return raw.decode("utf-8", "replace"), None
-        if ext not in self.OFFICE_FILES:
+        if ext in (ATTACH_TEXT if attachment else self.TEXT_FILES):
+            return decode_text(raw), None
+        if ext not in (ATTACH_OFFICE if attachment else self.OFFICE_FILES):
+            if attachment:
+                return None, ("Claude can't read %s. Attach pictures, PDFs, text files, or documents, "
+                              "spreadsheets and presentations." % name)
             return None, "Add a text document: .odt, .docx, .doc, .rtf or .txt."
-        fd, tmp = tempfile.mkstemp(suffix=ext, prefix="claude-voice-")
+        fd, tmp = tempfile.mkstemp(suffix=ext, prefix="claude-file-" if attachment else "claude-voice-")
         doc = None
         try:
             with os.fdopen(fd, "wb") as f:
@@ -322,6 +356,8 @@ class PanelServer:
             hidden.Name, hidden.Value = "Hidden", True
             desktop = self.ctx.ServiceManager.createInstanceWithContext("com.sun.star.frame.Desktop", self.ctx)
             doc = desktop.loadComponentFromURL(uno.systemPathToFileUrl(tmp), "_blank", 0, (hidden,))
+            if attachment:
+                return claude_office.file_text(doc), None
             if claude_office.doc_kind(doc) != claude_office.WRITER:
                 return None, "That isn't a text document."
             return claude_office.document_text(doc), None
@@ -498,6 +534,67 @@ def check_images(images):
             return [], "One of the images is larger than 5 MB."
         out.append({"media_type": i["media_type"], "data": i["data"]})
     return out, None
+
+
+def check_files(files, images):
+    """(files, problem) for the files sent with a request, besides `images` pictures:
+    [{"name", "data" (base64), "raw" (bytes)}]."""
+    if not files:
+        return [], None
+    if not isinstance(files, list) or images + len(files) > MAX_IMAGES:
+        return [], "Attach up to %d files and pictures at a time." % MAX_IMAGES
+    out, total = [], 0
+    for f in files:
+        if not isinstance(f, dict) or not isinstance(f.get("data"), str):
+            return [], "Couldn't read one of the files."
+        name = os.path.basename(str(f.get("name") or "file").replace("\\", "/")) or "file"
+        ext = os.path.splitext(name)[1].lower()
+        if ext != ATTACH_PDF and ext not in ATTACH_TEXT and ext not in ATTACH_OFFICE:
+            return [], ("Claude can't read %s. Attach pictures, PDFs, text files, or documents, "
+                        "spreadsheets and presentations." % name)
+        try:
+            raw = base64.b64decode(f["data"], validate=True)
+        except ValueError:
+            return [], "Couldn't read %s." % name
+        if len(raw) > MAX_FILE_BYTES:
+            return [], "%s is over %d MB." % (name, MAX_FILE_BYTES // (1024 * 1024))
+        total += len(raw)
+        if total > MAX_FILES_BYTES:
+            return [], "Those files are over %d MB together." % (MAX_FILES_BYTES // (1024 * 1024))
+        out.append({"name": name, "data": f["data"], "raw": raw})
+    return out, None
+
+
+def decode_text(raw):
+    """A text file's contents: UTF-8 when it is, else the Windows code page most files are in."""
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", "replace")
+
+
+def attached_texts(texts):
+    """The text of the files sent with a request, to follow the open file's own text."""
+    if not texts:
+        return ""
+    parts = []
+    for name, text in texts:
+        if len(text) > MAX_FILE_CHARS:
+            text = text[:MAX_FILE_CHARS] + "\n[... the rest of the file was cut off ...]"
+        parts.append('<attached_file name="%s">\n%s\n</attached_file>' % (name.replace('"', "'"), text))
+    return ("\n\nFiles I attached to this request (not part of the open file):\n" + "\n\n".join(parts))
+
+
+def focus_note(images, names):
+    """Tells Claude the pictures and files sent with a request are what it's about, not the open file."""
+    what = []
+    if images:
+        what.append("1 picture" if images == 1 else "%d pictures" % images)
+    what += names
+    if images + len(names) == 1:
+        return FOCUS.format(what=what[0], it="it", shows="shows", fits="fits")
+    return FOCUS.format(what=", ".join(what), it="them", shows="show", fits="fit").replace(
+        "what them", "what they").replace("where them", "where they")
 
 
 def conversation_prompt(context_text, history, instruction):
