@@ -201,6 +201,34 @@ def document_text(doc):
                      if not el.supportsService("com.sun.star.text.TextTable"))
 
 
+def file_text(doc):
+    """All the text of a file opened only to read it (a file attached to a message), whatever its kind."""
+    kind = doc_kind(doc)
+    if kind == WRITER:
+        return "\n".join(text for _, text, _ in writer_paragraphs(doc))
+    if kind == CALC:
+        sheets, budget, parts = doc.getSheets(), MAX_CELLS, []
+        for i in range(sheets.getCount()):
+            sheet = sheets.getByIndex(i)
+            area = _used_area(sheet)
+            cells = (area[2] + 1) * (area[3] + 1)
+            data = sheet.getCellRangeByPosition(*area).getFormulaArray()
+            if not any(v for row in data for v in row):
+                continue
+            if cells > budget:
+                parts.append("Sheet \"%s\" (%s) is too large to include." % (sheet.getName(), _ref(*area)))
+                continue
+            budget -= cells
+            parts.append("Sheet \"%s\" (%s):\n%s" % (sheet.getName(), _ref(*area), format_grid(data, 0, 0)))
+        return "\n\n".join(parts)
+    if kind in (IMPRESS, DRAW):
+        pages = doc.getDrawPages()
+        # Without the [S1] tags: those cite the open file's slides, not this one's.
+        return "\n\n".join(re.sub(r"^\[S\d+\] ", "", _page_text(pages.getByIndex(i), i + 1, kind))
+                           for i in range(pages.getCount()))
+    raise OfficeError("LibreOffice can't read the text of that file.")
+
+
 def selected_text(doc):
     return "\n".join(r.getString() for r in _writer_ranges(doc) if r.getString())
 

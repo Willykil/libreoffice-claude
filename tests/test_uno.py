@@ -212,6 +212,50 @@ class UnoTest(unittest.TestCase):
         self.assertIn("isn't supported", self.api("/api/ask", {"instruction": "x", "images": [
             {"media_type": "image/svg+xml", "data": "PHN2Zz4="}]})["error"])
 
+    def test_attachments_come_first(self):
+        # A screenshot sent with a question is what the question is about, not the whole document.
+        doc = self.open("swriter")
+        doc.getText().setString("Le document entier parle d'autre chose.")
+        image = {"media_type": "image/png", "data": "iVBORw0KGgo="}
+        self.api("/api/ask", {"instruction": "Qu'en penses-tu?", "images": [image]})
+        text = self.last_prompt()[-1]["text"]
+        self.assertIn("Attached to this request: 1 picture. The request is about it", text)
+        self.assertLess(text.index("Qu'en penses-tu?"), text.index("Attached to this request"))
+        self.api("/api/ask", {"instruction": "no picture"})
+        self.assertNotIn("Attached to this request", self.last_prompt())
+
+    def test_files_dropped_in_the_panel(self):
+        self.open("swriter")
+        # A spreadsheet, read through LibreOffice
+        calc = self.open("scalc")
+        calc.getSheets().getByIndex(0).getCellByPosition(1, 2).setString("Budget 2026")
+        ods_path = os.path.join(self.tmp, "budget.ods")
+        calc.storeToURL(uno.systemPathToFileUrl(ods_path), (_prop("FilterName", "calc8"),))
+        with open(ods_path, "rb") as f:
+            ods = base64.b64encode(f.read()).decode()
+        self.open("swriter")
+        txt = base64.b64encode("Notes à moi".encode("cp1252")).decode()
+        pdf = base64.b64encode(b"%PDF-1.4 fake").decode()
+        files = [{"name": "budget.ods", "data": ods}, {"name": "notes.txt", "data": txt},
+                 {"name": "C:\\Users\\me\\plan.pdf", "data": pdf}]
+        self.api("/api/ask", {"instruction": "compare", "files": files})
+        content = self.last_prompt()
+        self.assertEqual(content[0], {"type": "document", "title": "plan.pdf", "source": {
+            "type": "base64", "media_type": "application/pdf", "data": pdf}})
+        text = content[-1]["text"]
+        self.assertIn('<attached_file name="budget.ods">', text)
+        self.assertIn("Budget 2026", text)
+        self.assertIn('<attached_file name="notes.txt">\nNotes à moi\n', text)
+        self.assertIn("budget.ods, notes.txt, plan.pdf. The request is about them", text)
+        # A file alone is a question too; unknown kinds and too many are refused
+        self.api("/api/ask", {"files": files[1:2]})
+        self.assertIn(claude_panel.IMAGES_ONLY, self.last_prompt())
+        bad = self.api("/api/ask", {"instruction": "x", "files": [{"name": "app.exe", "data": "AAAA"}]})
+        self.assertIn("can't read app.exe", bad["error"])
+        image = {"media_type": "image/png", "data": "iVBORw0KGgo="}
+        many = self.api("/api/ask", {"instruction": "x", "images": [image] * 3, "files": files})
+        self.assertIn("up to 5", many["error"])
+
     def test_sidebar_can_go_wide(self):
         cp = self.ctx.ServiceManager.createInstanceWithContext(
             "com.sun.star.configuration.ConfigurationProvider", self.ctx)

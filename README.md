@@ -41,9 +41,11 @@ or the whole document / the sheet's filled area when nothing is selected) and of
 - **One menu for model, effort and tracked changes** - the *Opus 5.5 · High* button under the
   message box: model (Opus 5.5, Sonnet 5.5, Haiku 4.5, Fable 5.1), effort Low to Max (Haiku has
   none), and *Edits as tracked changes* for Writer (shown as a **Tracked** tag when on).
-- **Screenshots and pictures** - paste one with Ctrl+V, drop it on the message box, or use the picture
-  button, and Claude looks at it with your question (up to 5 per message; big ones are scaled down).
-  Full panel only.
+- **Screenshots, pictures and files** - paste with Ctrl+V, drop them anywhere on the panel, or use the
+  attach button, and Claude looks at them with your question: pictures, PDFs, text files, and documents,
+  spreadsheets and presentations LibreOffice opens (up to 5 per message, 10 MB each; big pictures are
+  scaled down). Claude answers about what you attached and uses the open file only as background, to
+  see where it fits. Full panel only.
 - **Clickable citations** - answers point at paragraphs (¶12) or cells (B7, Costs!B2:B9);
   click one to jump there.
 - **Claude reads the whole document or workbook** - every sheet in Calc (while under 50,000

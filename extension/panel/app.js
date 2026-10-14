@@ -43,7 +43,7 @@ const TONE_TIPS = {
 
 let state = { doc: null, quick: [], connection: "subscription", models: [], efforts: [], voice: {} };
 let busy = false;
-let pendingImages = [];    // screenshots waiting to be sent: { media_type, data (base64), url }
+let pendingImages = [];    // waiting to be sent: pictures { media_type, data (base64), url }, files { name, data }
 let chat = newChat();      // the conversation on screen; saved to history after each reply
 
 function newChat() {
@@ -128,7 +128,9 @@ function renderState() {
   $("context").classList.toggle("has-selection", hasSelection());
   $("contextIcon").replaceChildren(...icon(KIND_ICON[doc && doc.kind] || "doc").childNodes);
   $("docTitle").textContent = doc ? (doc.title || KIND_NAME[doc.kind] || "Document") : "No document";
-  $("ctxLabel").textContent = doc ? doc.label : "Open a document, spreadsheet or presentation.";
+  $("ctxLabel").textContent = !doc ? "Open a document, spreadsheet or presentation."
+    : pendingImages.length ? "Claude focuses on what you attached; the file is background"
+    : doc.label;
   $("welcomeSub").textContent = WELCOME[doc && doc.kind]
     || "Select some text, then pick an action below or ask me anything about your document.";
   if (state.connection !== usageFor) { usageFor = state.connection; usage = null; loadUsage(false); }
@@ -288,7 +290,8 @@ function richText(text) {
 /* ---------------------------------------------------------------- conversation */
 
 // images: the pictures' URLs while they're on screen, or how many there were (in saved chats).
-function addUser(text, images) {
+// files: the names of the files sent with it.
+function addUser(text, images, files) {
   $("welcome").hidden = true;
   document.querySelector(".app").classList.add("chatting");
   const m = el("div", "msg user");
@@ -303,6 +306,11 @@ function addUser(text, images) {
     m.appendChild(row);
   } else if (images > 0) {
     m.appendChild(el("div", "image-note", images === 1 ? "1 image attached" : images + " images attached"));
+  }
+  if (files && files.length) {
+    const row = el("div", "sent-files");
+    for (const name of files) row.appendChild(fileChip(name));
+    m.appendChild(row);
   }
   if (text) m.appendChild(el("div", "bubble", text));
   thread.appendChild(m);
@@ -632,9 +640,11 @@ function historyForApi() {
 async function ask(body, shownText, images) {
   if (busy) return;
   togglePopover(false);
-  images = images || [];
-  addUser(shownText || body.instruction, images.map((i) => i.url));
+  const files = (images || []).filter((i) => !i.url);
+  images = (images || []).filter((i) => i.url);
+  addUser(shownText || body.instruction, images.map((i) => i.url), files.map((f) => f.name));
   if (images.length) body.images = images.map((i) => ({ media_type: i.media_type, data: i.data }));
+  if (files.length) body.files = files.map((f) => ({ name: f.name, data: f.data }));
   busy = true;
   renderState();
   const thinking = addThinking();
@@ -657,11 +667,14 @@ async function ask(body, shownText, images) {
     const shown = shownText || body.instruction || "";
     res.tone = body.tone || "";
     // The pictures themselves aren't kept: later turns and saved chats only note that they were there.
-    const sent = images.length ? " [" + images.length + " image" + (images.length === 1 ? "" : "s") + " attached]" : "";
-    chat.messages.push({ role: "user", text: (body.instruction || shown) + sent, shown, images: images.length },
+    let sent = images.length ? " [" + images.length + " image" + (images.length === 1 ? "" : "s") + " attached]" : "";
+    if (files.length) sent += " [attached: " + files.map((f) => f.name).join(", ") + "]";
+    chat.messages.push({ role: "user", text: (body.instruction || shown) + sent, shown, images: images.length,
+                         files: files.map((f) => f.name) },
                        Object.assign({ role: "assistant" }, res));
     if (!chat.title) {
-      const title = shown || (images.length === 1 ? "Image" : "Images");
+      const title = shown || (files.length ? files.map((f) => f.name).join(", ")
+                                           : images.length === 1 ? "Image" : "Images");
       chat.title = title.length > 80 ? title.slice(0, 77) + "…" : title;
       chat.doc = state.doc ? state.doc.title : "";
       chat.kind = res.kind;
@@ -750,7 +763,7 @@ $("askForm").addEventListener("submit", (e) => {
   promptBox.value = "";
   autosize();
   const v = state.voice || {};
-  // My voice rewrites the selection; a message with pictures is a question about them.
+  // My voice rewrites the selection; a message with pictures or files is a question about them.
   ask(isWriter() && v.default && v.ready && !images.length ? { instruction: text, tone: "voice" }
                                                            : { instruction: text }, text, images);
 });
@@ -761,7 +774,7 @@ function showChat(c) {
   $("welcome").hidden = c.messages.length > 0;
   document.querySelector(".app").classList.toggle("chatting", c.messages.length > 0);
   for (const m of c.messages) {
-    if (m.role === "user") addUser(m.shown || m.text, m.images || 0);
+    if (m.role === "user") addUser(m.shown || m.text, m.images || 0, m.files);
     else addReply(m);
   }
 }
@@ -1002,9 +1015,21 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") { closeSheets(); togglePopover(false); }
 });
 
-/* ---------------------------------------------------------------- screenshots */
+/* ---------------------------------------------------------------- screenshots and files */
 
-const MAX_IMAGES = 5;
+const MAX_IMAGES = 5;                  // pictures and files together
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+// Besides pictures: PDFs, text files, and anything LibreOffice opens (read as text). Same list as the server's.
+const FILE_TYPES = /\.(pdf|txt|md|csv|tsv|json|xml|html?|log|ya?ml|odt|docx|docm|doc|rtf|fodt|ott|dotx|wpd|ods|xlsx|xlsm|xls|fods|ots|odp|pptx|ppt|fodp|otp|odg)$/i;
+
+function fileChip(name) {
+  const chip = el("span", "file-chip");
+  chip.title = name;
+  chip.append(icon(/\.(ods|xlsx|xlsm|xls|fods|ots|csv|tsv)$/i.test(name) ? "sheet"
+                   : /\.(odp|pptx|ppt|fodp|otp|odg)$/i.test(name) ? "slides" : "doc"),
+              el("span", "file-name", name));
+  return chip;
+}
 const MAX_EDGE = 1568;                 // Claude scales larger pictures down to about this anyway
 const MAX_BYTES = 3.5 * 1024 * 1024;   // well under the 5 MB the API takes per picture
 
@@ -1012,20 +1037,26 @@ function renderAttachments() {
   const box = $("attachments");
   box.hidden = !pendingImages.length;
   box.replaceChildren(...pendingImages.map((img, i) => {
-    const t = el("div", "thumb");
-    const pic = el("img");
-    pic.src = img.url;
-    pic.alt = "Image to send";
+    const t = el("div", img.url ? "thumb" : "thumb file");
+    let pic;
+    if (img.url) {
+      pic = el("img");
+      pic.src = img.url;
+      pic.alt = "Image to send";
+    } else {
+      pic = fileChip(img.name);
+    }
     const x = el("button", "remove");
     x.type = "button";
-    x.title = "Don't send this image";
-    x.setAttribute("aria-label", "Remove image");
+    x.title = img.url ? "Don't send this image" : "Don't send " + img.name;
+    x.setAttribute("aria-label", img.url ? "Remove image" : "Remove " + img.name);
     x.appendChild(icon("x"));
     x.addEventListener("click", () => { pendingImages.splice(i, 1); renderAttachments(); promptBox.focus(); });
     t.append(pic, x);
     return t;
   }));
   updateSend();
+  renderState();
 }
 
 function canvasBlob(canvas, type, quality) {
@@ -1060,12 +1091,28 @@ async function prepareImage(file) {
   return { media_type: blob.type, data: url.slice(url.indexOf(",") + 1), url };
 }
 
+async function prepareFile(file) {
+  const url = await dataUrl(file);
+  return { name: file.name, data: url.slice(url.indexOf(",") + 1) };
+}
+
+const isPicture = (f) => f.type.startsWith("image/") && f.type !== "image/svg+xml";
+
+// Pictures, documents, PDFs... dropped, pasted or picked: added to the next message.
 async function addImages(files) {
-  const images = [...files].filter((f) => f.type.startsWith("image/"));
-  if (!images.length) return false;
-  for (const f of images) {
-    if (pendingImages.length >= MAX_IMAGES) { toast("Up to " + MAX_IMAGES + " images per message", true); break; }
-    try { pendingImages.push(await prepareImage(f)); } catch (e) { toast("Couldn't read that image", true); }
+  files = [...files];
+  if (!files.length) return false;
+  for (const f of files) {
+    if (pendingImages.length >= MAX_IMAGES) { toast("Up to " + MAX_IMAGES + " files per message", true); break; }
+    if (isPicture(f)) {
+      try { pendingImages.push(await prepareImage(f)); } catch (e) { toast("Couldn't read " + (f.name || "that image"), true); }
+    } else if (!FILE_TYPES.test(f.name)) {
+      toast("Claude can't read " + f.name + ". Try a picture, PDF, document, spreadsheet or presentation", true);
+    } else if (f.size > MAX_FILE_BYTES) {
+      toast(f.name + " is over 10 MB", true);
+    } else {
+      try { pendingImages.push(await prepareFile(f)); } catch (e) { toast("Couldn't read " + f.name, true); }
+    }
   }
   renderAttachments();
   promptBox.focus();
@@ -1077,20 +1124,39 @@ $("imageInput").addEventListener("change", (e) => { addImages(e.target.files); e
 document.addEventListener("paste", (e) => {
   if (!$("settings").hidden || !$("voice").hidden) return;      // pasting a key or a profile there
   const files = [...(e.clipboardData ? e.clipboardData.files : [])];
-  if (files.some((f) => f.type.startsWith("image/"))) {
+  if (files.length) {
     e.preventDefault();
     addImages(files);
   }
 });
-const askBox = $("askForm");
-askBox.addEventListener("dragover", (e) => {
-  if ([...e.dataTransfer.items].some((i) => i.kind === "file")) { e.preventDefault(); askBox.classList.add("dropping"); }
-});
-askBox.addEventListener("dragleave", () => askBox.classList.remove("dropping"));
-askBox.addEventListener("drop", (e) => {
-  askBox.classList.remove("dropping");
-  if (!e.dataTransfer.files.length) return;
+// Files can be dropped anywhere on the panel, not just the message box: left to itself, the browser
+// would open a dropped file in place of the panel.
+const draggingFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+let dragDepth = 0;
+function showDropZone(on) {
+  document.body.classList.toggle("dropping", on);
+  if (!on) dragDepth = 0;
+}
+document.addEventListener("dragenter", (e) => {
+  if (!draggingFiles(e)) return;
   e.preventDefault();
+  dragDepth++;
+  showDropZone($("voice").hidden);           // the My voice sheet takes its own files
+});
+document.addEventListener("dragover", (e) => {
+  if (!draggingFiles(e)) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = $("voice").hidden ? "copy" : "none";
+});
+document.addEventListener("dragleave", (e) => {
+  if (draggingFiles(e) && --dragDepth <= 0) showDropZone(false);
+});
+document.addEventListener("drop", (e) => {
+  if (!draggingFiles(e)) return;
+  e.preventDefault();
+  showDropZone(false);
+  if (!$("voice").hidden || !e.dataTransfer.files.length) return;
+  closeSheets();
   addImages(e.dataTransfer.files);
 });
 
